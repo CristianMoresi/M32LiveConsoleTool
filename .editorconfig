@@ -1,0 +1,32 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = crlf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{json,yml,yaml,md}]
+indent_size = 2
+
+[*.cs]
+# Language conventions
+dotnet_sort_system_directives_first = true
+csharp_using_directive_placement = outside_namespace:warning
+csharp_style_namespace_declarations = file_scoped:warning
+csharp_prefer_braces = true:suggestion
+dotnet_style_qualification_for_field = false:suggestion
+dotnet_style_qualification_for_property = false:suggestion
+
+# Naming: constants and static readonly
+dotnet_naming_rule.constants_should_be_upper.severity = suggestion
+dotnet_naming_rule.constants_should_be_upper.symbols = constant_fields
+dotnet_naming_rule.constants_should_be_upper.style = upper_snake_case
+
+dotnet_naming_symbols.constant_fields.applicable_kinds = field
+dotnet_naming_symbols.constant_fields.required_modifiers = const
+
+dotnet_naming_style.upper_snake_case.capitalization = all_upper
+dotnet_naming_style.upper_snake_case.word_separator = _

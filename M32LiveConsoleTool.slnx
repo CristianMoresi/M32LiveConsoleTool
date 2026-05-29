@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="M32LiveConsoleTool.csproj" />
+  <Project Path="tests/M32LiveConsoleTool.Tests/M32LiveConsoleTool.Tests.csproj" />
+</Solution>
