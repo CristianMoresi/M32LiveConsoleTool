@@ -5,8 +5,8 @@
 
 M32 Live Console Tool is a **mixing-automation** tool for the **Midas M32 /
 Behringer X32**. It is not a remote control or a backup utility: it actively works
-the mix in real time and does three things — an **automatic level-mixer** that holds
-every channel and bus to a target level you set, **automatic clip protection**, and
+the mix in real time and does three things — **auto-leveling** that keeps every
+channel and bus at a target level you set, **automatic clip protection**, and
 **tempo-synced effect delays**. It talks to the console over OSC/UDP, and runs
 against the real hardware or a built-in simulator.
 
@@ -203,7 +203,7 @@ test of the control loop and effect detection against the simulator.
 
 ## License
 
-[MIT](LICENSE) © Cristian Moresi
+[MIT](LICENSE) © [Cristian Moresi](https://cristianmoresi.com)
 
 ## Acknowledgements
 
