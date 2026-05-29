@@ -4,11 +4,15 @@
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4.svg)](https://dotnet.microsoft.com/)
 
 M32 Live Console Tool is a **mixing-automation** tool for the **Midas M32 /
-Behringer X32**. It is not a remote control or a backup utility: it actively works
-the mix in real time and does three things — **auto-leveling** that keeps every
-channel and bus at a target level you set, **automatic clip protection**, and
-**tempo-synced effect delays**. It talks to the console over OSC/UDP, and runs
-against the real hardware or a built-in simulator.
+Behringer X32**. It is not a remote control or a backup utility — it runs three
+automations on the live mix:
+
+- **Auto-leveling** — keeps every channel and bus at a target level you set.
+- **Auto anti-clipping** — when a channel clips, it automatically pulls the gain down.
+- **Auto delays** — keeps the effect delays automatically synced to the tempo.
+
+It talks to the console over OSC/UDP and runs against the real hardware or a
+built-in simulator.
 
 > **Note** — M32 and X32 are trademarks of Music Tribe. This is an independent,
 > unofficial tool and is not affiliated with or endorsed by Music Tribe.
@@ -28,7 +32,7 @@ It does nothing while a channel is muted or below a silence gate, ignores large 
 (an intentional cut, not drift), and stands down as soon as the engineer moves that
 fader, resuming only once the fader has settled.
 
-### Clip protection
+### Auto anti-clipping
 
 An anti-clip safety net. It watches each channel's post-trim level and, once it
 confirms the channel is clipping (over the threshold for a few consecutive samples),
@@ -37,7 +41,7 @@ AES50 stage box — so the channel stops clipping. The reduction is larger the f
 the peak went over the threshold. It only attenuates; it never raises the gain back
 on its own.
 
-### Tempo-synced delays
+### Auto delays (tempo-synced)
 
 It detects the tempo (from a click track, a percussive channel, or manual tap tempo)
 and sets the console's delay slots to a chosen rhythmic figure — a dotted eighth, for
