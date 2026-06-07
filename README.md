@@ -2,6 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4.svg)](https://dotnet.microsoft.com/)
+[![Release](https://github.com/CristianMoresi/M32LiveConsoleTool/actions/workflows/release.yml/badge.svg)](https://github.com/CristianMoresi/M32LiveConsoleTool/actions/workflows/release.yml)
 
 M32 Live Console Tool is a **mixing-automation** tool for the **Midas M32 /
 Behringer X32**. It is not a remote control or a backup utility — it runs three
@@ -95,10 +96,35 @@ when to send. Concurrency uses a copy-on-write pattern for the hot device lists
 and lock-guarded snapshots for the meter history, so the OSC receive thread and
 the module worker threads never block each other on the critical path.
 
+## Download
+
+Grab a ready-to-run executable for your platform from the
+[latest release](https://github.com/CristianMoresi/M32LiveConsoleTool/releases/latest)
+— a single file with the .NET runtime embedded, so there is nothing to install and
+no dependencies.
+
+| Platform | File |
+| --- | --- |
+| Windows · x64 | `…-win-x64.zip` |
+| Linux · x64 | `…-linux-x64.tar.gz` |
+| macOS · Apple Silicon | `…-osx-arm64.tar.gz` |
+| macOS · Intel | `…-osx-x64.tar.gz` |
+
+Unzip it (Windows) or extract it with `tar -xzf` (Linux/macOS) and run
+`M32LiveConsoleTool` from a terminal — it is a console application, not a windowed
+one. The binaries are not code-signed, so the first launch needs one extra step:
+
+- **Windows** — SmartScreen may ask you to confirm via **More info → Run anyway**.
+- **macOS** — clear Gatekeeper's quarantine flag with
+  `xattr -d com.apple.quarantine M32LiveConsoleTool`.
+
+Each release also ships a `SHA256SUMS.txt` you can check your download against.
+
 ## Requirements
 
-- [.NET 10 SDK](https://dotnet.microsoft.com/) (or the .NET 10 runtime to run a
-  published build).
+- To run a release binary: nothing — the .NET runtime is embedded in the
+  executable. Download, extract and run.
+- To build from source: the [.NET 10 SDK](https://dotnet.microsoft.com/).
 - For real hardware: an M32/X32 reachable on the local network, with OSC enabled
   on the standard ports (10023 send, 10024 receive).
 - Works on Windows, macOS and Linux. On Windows 10+ the dashboard enables ANSI

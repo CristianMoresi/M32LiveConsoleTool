@@ -1,0 +1,222 @@
+name: Release
+
+# On every push to main the project is built and tested. A release with the
+# portable, self-contained executables is published only when <Version> in
+# M32LiveConsoleTool.csproj changes (i.e. its tag does not exist yet), so bumping
+# that number is the single gesture that ships a new release.
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+# Least privilege by default; only the release job is allowed to write (it creates
+# the tag and the GitHub release).
+permissions:
+  contents: read
+
+# Never let two runs publish the same release at once, and never abort one midway.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PROJECT: M32LiveConsoleTool.csproj
+  SOLUTION: M32LiveConsoleTool.slnx
+  DOTNET_VERSION: '10.0.x'
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+
+jobs:
+  validate:
+    name: Build, test and read version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      should_release: ${{ steps.gate.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore
+        run: dotnet restore "$SOLUTION"
+
+      - name: Build
+        run: dotnet build "$SOLUTION" -c Release --no-restore
+
+      - name: Test
+        run: dotnet test "$SOLUTION" -c Release --no-build --verbosity normal
+
+      - name: Read version from the project
+        id: version
+        run: |
+          version="$(dotnet msbuild "$PROJECT" -nologo --getProperty:Version)"
+          version="$(echo "$version" | tr -d '[:space:]')"
+          if [ -z "$version" ]; then
+            echo "Could not read <Version> from $PROJECT" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Project version: $version"
+
+      - name: Decide whether to release
+        id: gate
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          if git ls-remote --tags --exit-code origin "refs/tags/v$version" >/dev/null 2>&1; then
+            echo "Tag v$version already exists -- nothing to release."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Tag v$version does not exist -- a release will be published."
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Publish ${{ matrix.rid }}
+    needs: validate
+    if: needs.validate.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - rid: win-x64
+            archive: zip
+          - rid: linux-x64
+            archive: tar
+          - rid: osx-x64
+            archive: tar
+          - rid: osx-arm64
+            archive: tar
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      # Single self-contained file with the runtime embedded. No trimming, so
+      # reflection-based JSON config keeps working; compression keeps the size down.
+      - name: Publish self-contained single file
+        run: |
+          dotnet publish "$PROJECT" \
+            -c Release \
+            -r "${{ matrix.rid }}" \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:EnableCompressionInSingleFile=true \
+            -p:IncludeNativeLibrariesForSelfExtract=true \
+            -p:DebugType=none \
+            -p:DebugSymbols=false \
+            -o "out/${{ matrix.rid }}"
+
+      - name: Stage and compress
+        run: |
+          version="${{ needs.validate.outputs.version }}"
+          rid="${{ matrix.rid }}"
+          name="M32LiveConsoleTool-v$version-$rid"
+          stage="stage/$name"
+          mkdir -p "$stage" dist
+
+          if [ -f "out/$rid/M32LiveConsoleTool.exe" ]; then
+            cp "out/$rid/M32LiveConsoleTool.exe" "$stage/"
+          else
+            cp "out/$rid/M32LiveConsoleTool" "$stage/"
+            chmod +x "$stage/M32LiveConsoleTool"
+          fi
+          cp LICENSE README.md "$stage/"
+
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            (cd stage && zip -r -q "../dist/$name.zip" "$name")
+          else
+            tar -czf "dist/$name.tar.gz" -C stage "$name"
+          fi
+          ls -lh dist
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.rid }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Publish GitHub release
+    needs: [ validate, build ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: dist-*
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Write release notes
+        run: |
+          cat > notes.md <<'EOF'
+          ## Downloads
+
+          | Platform | File |
+          | --- | --- |
+          | Windows &middot; x64 | `M32LiveConsoleTool-v${{ needs.validate.outputs.version }}-win-x64.zip` |
+          | Linux &middot; x64 | `M32LiveConsoleTool-v${{ needs.validate.outputs.version }}-linux-x64.tar.gz` |
+          | macOS &middot; Apple Silicon | `M32LiveConsoleTool-v${{ needs.validate.outputs.version }}-osx-arm64.tar.gz` |
+          | macOS &middot; Intel | `M32LiveConsoleTool-v${{ needs.validate.outputs.version }}-osx-x64.tar.gz` |
+
+          Each archive holds a single self-contained executable with the .NET runtime
+          embedded -- no installation and no dependencies.
+
+          ## Run it
+
+          **Windows** -- unzip and run `M32LiveConsoleTool.exe`. If SmartScreen warns
+          about an unrecognized app, choose **More info -> Run anyway**.
+
+          **Linux / macOS** -- extract and run it from a terminal:
+
+          ```bash
+          tar -xzf M32LiveConsoleTool-v<version>-<platform>.tar.gz
+          cd M32LiveConsoleTool-v<version>-<platform>
+          chmod +x M32LiveConsoleTool
+          ./M32LiveConsoleTool
+          ```
+
+          On macOS the binary is not code-signed, so Gatekeeper may block it on first
+          launch. Clear the quarantine attribute and run it again:
+
+          ```bash
+          xattr -d com.apple.quarantine M32LiveConsoleTool
+          ```
+
+          ## Verify the download (optional)
+
+          ```bash
+          sha256sum -c SHA256SUMS.txt        # Linux
+          shasum -a 256 -c SHA256SUMS.txt    # macOS
+          ```
+          EOF
+          cat notes.md
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v${{ needs.validate.outputs.version }}" dist/* \
+            --target "${{ github.sha }}" \
+            --title "M32 Live Console Tool v${{ needs.validate.outputs.version }}" \
+            --notes-file notes.md
