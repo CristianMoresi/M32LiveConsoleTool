@@ -2,6 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4.svg)](https://dotnet.microsoft.com/)
+[![CI](https://github.com/CristianMoresi/M32LiveConsoleTool/actions/workflows/ci.yml/badge.svg)](https://github.com/CristianMoresi/M32LiveConsoleTool/actions/workflows/ci.yml)
 [![Release](https://github.com/CristianMoresi/M32LiveConsoleTool/actions/workflows/release.yml/badge.svg)](https://github.com/CristianMoresi/M32LiveConsoleTool/actions/workflows/release.yml)
 
 M32 Live Console Tool is a **mixing-automation** tool for the **Midas M32 /
@@ -31,7 +32,9 @@ sudden. It runs on all watched channels and buses at once.
 
 It does nothing while a channel is muted or below a silence gate, ignores large drops
 (an intentional cut, not drift), and stands down as soon as the engineer moves that
-fader, resuming only once the fader has settled.
+fader, resuming only once the fader has settled — and, if the move happened during a
+pause, only once there is real signal again, so it never mistakes silence for the new
+target level.
 
 ### Auto anti-clipping
 
@@ -39,8 +42,11 @@ An anti-clip safety net. It watches each channel's post-trim level and, once it
 confirms the channel is clipping (over the threshold for a few consecutive samples),
 it reduces the gain at the source feeding that channel — the local head amp or the
 AES50 stage box — so the channel stops clipping. The reduction is larger the further
-the peak went over the threshold. It only attenuates; it never raises the gain back
-on its own.
+the peak went over the threshold, and is applied on the console's own gain grid
+(0.5 dB head amp steps, 0.25 dB trim steps). It only attenuates; it never raises the
+gain back on its own. If the gain is already at its physical minimum and the channel
+still clips, it raises a single clear warning — manual action required — instead of
+logging reductions that no longer reduce anything.
 
 ### Auto delays (tempo-synced)
 
@@ -194,9 +200,12 @@ module, configure a delay slot, re-detect the effects loaded in the FX slots, ta
 tempo, recalibrate targets, manage channels, save/load presets, or `[0]` to release
 all automatic control at once. Each module's submenu also edits its parameters live
 (the leveler's up/down speed has presets), with no need to touch the config file.
-The channel marked `*` is the one the BPM detector reads its tempo from. Every input
-flow can be cancelled with `Esc`. The session is saved automatically on exit
-(including Ctrl+C and window close).
+The BPM submenu includes a figure-times table — every rhythmic figure converted to
+milliseconds at the current tempo, with values beyond the console's 3000 ms cap
+marked. The channel marked `*` is the one the BPM detector reads its tempo from.
+Every input flow can be cancelled with `Esc` and every notice is dismissed with a
+key press, at your own pace. The session is saved automatically on exit (including
+Ctrl+C and window close).
 
 ## Persistence
 
@@ -218,12 +227,18 @@ dotnet test
 ```
 
 The xUnit suite covers the OSC encode/decode round-trip (including malformed-blob
-rejection), the fader/dB/beat math, the power-domain level average, the delay-slot
-logic, the FX effect catalog and delay-type resolution, the mixer-IP validation,
-fader-feedback and mute handling, tap-tempo BPM detection and freshness tracking,
-the domain value objects, module parameter validation, the repair of out-of-range
-or duplicated loaded configurations, the preset-name validation, and an end-to-end
-test of the control loop and effect detection against the simulator.
+rejection), the meter-blob parser's corrupt-packet guards, the fader/dB/beat math,
+the power-domain level average, the delay-slot logic, the FX effect catalog and
+delay-type resolution, the mixer-IP validation, fader-feedback and mute handling,
+tap-tempo BPM detection and freshness tracking, the domain value objects, module
+parameter validation, the repair of corrupt or hand-edited configurations
+(out-of-range values, invalid delay slots, bad IP), the leveler's silence-safe
+target re-capture after a manual move, the session/preset persistence round-trip,
+the preset-name validation, and an end-to-end test of the control loop and effect
+detection against the simulator.
+
+Every pull request and branch push runs the suite in CI; releases run it again
+before publishing.
 
 ## Known limitations
 

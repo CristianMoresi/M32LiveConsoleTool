@@ -47,13 +47,13 @@ public class Bus : AudioDevice
     }
 
     /// <inheritdoc/>
-    public override string GetOscAddress()
+    protected override string BuildOscAddress()
     {
         return $"/bus/{oscNumber:D2}/mix/fader";
     }
 
     /// <inheritdoc/>
-    public override string GetMuteOscAddress()
+    protected override string BuildMuteOscAddress()
     {
         return $"/bus/{oscNumber:D2}/mix/on";
     }

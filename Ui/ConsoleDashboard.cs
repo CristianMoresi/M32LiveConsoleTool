@@ -875,7 +875,7 @@ public class ConsoleDashboard
         {
             int hiddenCount = devices.Count - deviceCountShown;
             SetRow(rows, startRow + 2 + deviceCountShown,
-                $"   ... and {hiddenCount} more (widen the window to see them)", width);
+                $"   ... and {hiddenCount} more (make the window taller to see them)", width);
         }
 
         // Fill any remaining rows with blanks.
@@ -1004,7 +1004,7 @@ public class ConsoleDashboard
         {
             int hiddenCount = ordered.Count - slotsShown;
             SetRow(rows, startRow + 2 + slotsShown,
-                $"   ... and {hiddenCount} more (widen the window to see them)", width);
+                $"   ... and {hiddenCount} more (make the window taller to see them)", width);
         }
 
         int firstBlank = overflow ? slotsShown + 1 : slotsShown;

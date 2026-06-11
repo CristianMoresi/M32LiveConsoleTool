@@ -41,4 +41,62 @@ public class MeterReaderTests
 
         Assert.Equal(-90.0, meter.GetMovingAverage(channel));
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Meter-blob parsing (M32 native format: little-endian count + floats)
+    // ─────────────────────────────────────────────────────────────────────
+
+    private static byte[] BuildMeterBlob(int declaredCount, params float[] floats)
+    {
+        byte[] blob = new byte[4 + floats.Length * 4];
+        Buffer.BlockCopy(BitConverter.GetBytes(declaredCount), 0, blob, 0, 4);
+        for (int i = 0; i < floats.Length; i++)
+        {
+            Buffer.BlockCopy(BitConverter.GetBytes(floats[i]), 0, blob, 4 + i * 4, 4);
+        }
+        return blob;
+    }
+
+    [Fact]
+    public void ParseMeterBlob_decodes_a_valid_blob()
+    {
+        byte[] blob = BuildMeterBlob(2, 0.5f, 1.0f);
+
+        float[] meters = MeterReader.ParseMeterBlob(blob);
+
+        Assert.Equal(new[] { 0.5f, 1.0f }, meters);
+    }
+
+    [Fact]
+    public void ParseMeterBlob_rejects_a_truncated_blob()
+    {
+        Assert.Empty(MeterReader.ParseMeterBlob(new byte[] { 0x01, 0x00 }));
+        Assert.Empty(MeterReader.ParseMeterBlob(Array.Empty<byte>()));
+    }
+
+    [Fact]
+    public void ParseMeterBlob_rejects_a_negative_count()
+    {
+        byte[] blob = BuildMeterBlob(-1, 0.5f);
+
+        Assert.Empty(MeterReader.ParseMeterBlob(blob));
+    }
+
+    [Fact]
+    public void ParseMeterBlob_rejects_a_count_exceeding_the_payload()
+    {
+        // Declares 100 floats but carries only 2. A corrupt packet must yield
+        // nothing rather than read past the buffer or allocate from a lie.
+        byte[] blob = BuildMeterBlob(100, 0.5f, 1.0f);
+
+        Assert.Empty(MeterReader.ParseMeterBlob(blob));
+    }
+
+    [Fact]
+    public void ParseMeterBlob_rejects_a_huge_count_that_would_overflow()
+    {
+        byte[] blob = BuildMeterBlob(int.MaxValue);
+
+        Assert.Empty(MeterReader.ParseMeterBlob(blob));
+    }
 }

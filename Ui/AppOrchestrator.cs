@@ -174,6 +174,22 @@ public class AppOrchestrator
         File.WriteAllText(path, JsonSerializer.Serialize(config, JsonWriteOptions));
     }
 
+    /// <summary>
+    /// Reads and deserializes a session config from <paramref name="path"/>,
+    /// repairing any out-of-range value via <see cref="SessionConfig.Sanitize"/> so
+    /// the result can always be applied without throwing. The single read path for
+    /// both the last session and named presets.
+    /// </summary>
+    /// <exception cref="InvalidDataException">If the JSON deserializes to nothing.</exception>
+    public static SessionConfig ReadSession(string path)
+    {
+        string json = File.ReadAllText(path);
+        SessionConfig loaded = JsonSerializer.Deserialize<SessionConfig>(json, JsonReadOptions)
+            ?? throw new InvalidDataException("Empty or invalid session file.");
+        loaded.Sanitize();
+        return loaded;
+    }
+
     // ─────────────────────────────────────────────────────────────────────
     // Initialization and startup
     // ─────────────────────────────────────────────────────────────────────
@@ -546,15 +562,18 @@ public class AppOrchestrator
     // ─────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Changes the BpmDetector's target channel. If the channel is not already in
-    /// the watched list, it is first added to the MeterReader so the detector can
-    /// receive samples from it.
+    /// Changes the BpmDetector's target channel. If the channel is not already
+    /// watched, it is registered through <see cref="AddChannel"/> — the full
+    /// registration (meters, leveling, clip protection and persistence) — so the
+    /// live session and the one restored after a restart behave identically. A
+    /// partial registration here would create a channel that streams meters now
+    /// but silently becomes a fully managed channel on the next launch.
     /// </summary>
     public void SetBpmTargetChannel(MixerChannel channel)
     {
         if (!meterReader!.Devices.Contains(channel))
         {
-            meterReader.AddDevice(channel);
+            AddChannel(channel);
         }
 
         bpmDetector!.TargetChannel = channel;
@@ -881,11 +900,7 @@ public class AppOrchestrator
             throw new FileNotFoundException($"Preset not found: {presetName}");
         }
 
-        string json = File.ReadAllText(path);
-        SessionConfig loaded = JsonSerializer.Deserialize<SessionConfig>(json, JsonReadOptions)
-            ?? throw new InvalidDataException("Empty or invalid preset.");
-
-        ApplyLoadedConfig(loaded);
+        ApplyLoadedConfig(ReadSession(path));
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -906,16 +921,9 @@ public class AppOrchestrator
 
         try
         {
-            string json = File.ReadAllText(AppPaths.LastSessionFile);
-            SessionConfig? loaded = JsonSerializer.Deserialize<SessionConfig>(json, JsonReadOptions);
-            if (loaded == null)
-            {
-                return new SessionConfig();
-            }
-            // Repair any out-of-range value so module construction cannot throw on a
-            // hand-edited or corrupt file.
-            loaded.Sanitize();
-            return loaded;
+            // ReadSession repairs any out-of-range value, so module construction
+            // cannot throw on a hand-edited or corrupt file.
+            return ReadSession(AppPaths.LastSessionFile);
         }
         catch
         {

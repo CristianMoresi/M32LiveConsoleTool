@@ -28,6 +28,14 @@ public class MixerChannel : AudioDevice
     /// </summary>
     private volatile int headAmpIndex = -1;
 
+    /// <summary>
+    /// <c>true</c> once the console has answered this channel's <c>/-ha/NN/index</c>
+    /// query. Distinguishes "not answered yet" (the query or its UDP reply was
+    /// lost, so the MeterReader keeps re-asking) from "answered -1" (a genuine
+    /// digital source with no analog head amp, which needs no retry).
+    /// </summary>
+    private volatile bool headAmpResolved;
+
     // ─────────────────────────────────────────────────────────────────────
     // Constructor
     // ─────────────────────────────────────────────────────────────────────
@@ -68,6 +76,18 @@ public class MixerChannel : AudioDevice
         set { headAmpIndex = value; }
     }
 
+    /// <summary>
+    /// <c>true</c> once the console has answered the head amp query for this
+    /// channel (even with -1, meaning a digital source). While <c>false</c>, the
+    /// MeterReader periodically re-sends the query in case the original datagram
+    /// was lost over UDP.
+    /// </summary>
+    public bool HeadAmpResolved
+    {
+        get { return headAmpResolved; }
+        set { headAmpResolved = value; }
+    }
+
     // ─────────────────────────────────────────────────────────────────────
     // Overrides of AudioDevice
     // ─────────────────────────────────────────────────────────────────────
@@ -86,13 +106,13 @@ public class MixerChannel : AudioDevice
     }
 
     /// <inheritdoc/>
-    public override string GetOscAddress()
+    protected override string BuildOscAddress()
     {
         return $"/ch/{oscNumber:D2}/mix/fader";
     }
 
     /// <inheritdoc/>
-    public override string GetMuteOscAddress()
+    protected override string BuildMuteOscAddress()
     {
         return $"/ch/{oscNumber:D2}/mix/on";
     }

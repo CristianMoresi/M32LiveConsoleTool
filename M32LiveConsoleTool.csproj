@@ -17,11 +17,17 @@
     <Product>M32 Live Console Tool</Product>
     <Authors>Cristian Moresi</Authors>
     <Description>Console application that automates live-sound engineering tasks on a Midas M32 / Behringer X32 mixing console over OSC/UDP: automatic leveling, clip protection and tempo-synced delays, with a built-in mixer simulator and an adaptive terminal dashboard.</Description>
-    <Version>1.0.1</Version>
+    <Version>1.1.0</Version>
     <RepositoryUrl>https://github.com/CristianMoresi/M32LiveConsoleTool</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <Copyright>Copyright (c) 2026 Cristian Moresi</Copyright>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The test project exercises a few internal helpers (e.g. the meter-blob
+         parser's malformed-packet guards) directly. -->
+    <InternalsVisibleTo Include="M32LiveConsoleTool.Tests" />
+  </ItemGroup>
 
 </Project>

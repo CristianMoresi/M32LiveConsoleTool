@@ -143,6 +143,14 @@ public class BpmDetector
     /// <summary>Consecutive detections of the current candidate.</summary>
     private int candidateMatchCount;
 
+    /// <summary>
+    /// Timestamp of the newest transient already counted as change-confirmation
+    /// evidence. The poll loop re-evaluates the same windows every cycle (50 ms);
+    /// without this guard, re-reading an unchanged window four times would satisfy
+    /// the confirmation count in 200 ms with no new musical evidence at all.
+    /// </summary>
+    private DateTime lastChangeEvidenceUtc = DateTime.MinValue;
+
     // ─────────────────────────────────────────────────────────────────────
     // Constructor
     // ─────────────────────────────────────────────────────────────────────
@@ -159,18 +167,8 @@ public class BpmDetector
         double transientThresholdDb,
         double bpmChangeHysteresis = DEFAULT_BPM_CHANGE_HYSTERESIS)
     {
-        if (transientThresholdDb > 0 || transientThresholdDb < -60)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(transientThresholdDb),
-                "Transient threshold must be between -60 and 0 dB.");
-        }
-        if (bpmChangeHysteresis < 0 || bpmChangeHysteresis > 20)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(bpmChangeHysteresis),
-                "Hysteresis must be between 0 and 20 BPM.");
-        }
+        ValidateTransientThreshold(transientThresholdDb);
+        ValidateHysteresis(bpmChangeHysteresis);
 
         this.meterReader = meterReader;
         this.delayController = delayController;
@@ -262,16 +260,44 @@ public class BpmDetector
         }
     }
 
+    /// <remarks>
+    /// The setters apply the same validation as the constructor, so a live edit
+    /// can never put the module in a state the constructor would have rejected.
+    /// </remarks>
     public double TransientThresholdDb
     {
         get { return transientThresholdDb; }
-        set { transientThresholdDb = value; }
+        set { ValidateTransientThreshold(value); transientThresholdDb = value; }
     }
 
     public double BpmChangeHysteresis
     {
         get { return bpmChangeHysteresis; }
-        set { bpmChangeHysteresis = value; }
+        set { ValidateHysteresis(value); bpmChangeHysteresis = value; }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Parameter validation (shared by the constructor and the setters)
+    // ─────────────────────────────────────────────────────────────────────
+
+    private static void ValidateTransientThreshold(double transientThresholdDb)
+    {
+        if (transientThresholdDb > 0 || transientThresholdDb < -60)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(transientThresholdDb),
+                "Transient threshold must be between -60 and 0 dB.");
+        }
+    }
+
+    private static void ValidateHysteresis(double bpmChangeHysteresis)
+    {
+        if (bpmChangeHysteresis < 0 || bpmChangeHysteresis > 20)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(bpmChangeHysteresis),
+                "Hysteresis must be between 0 and 20 BPM.");
+        }
     }
 
     /// <summary>
@@ -526,7 +552,16 @@ public class BpmDetector
         }
 
         // Case 3: very different candidate. Possible song change, but require
-        // several consecutive similar short-window detections before accepting.
+        // several consecutive similar detections before accepting — and only count
+        // a detection when a NEW transient has arrived since the last one counted,
+        // so the confirmation reflects real musical evidence rather than the poll
+        // loop re-reading the same window every 50 ms.
+        if (lastTransientUtc <= lastChangeEvidenceUtc)
+        {
+            return;
+        }
+        lastChangeEvidenceUtc = lastTransientUtc;
+
         if (Math.Abs(newBpm - candidateBpm) < CANDIDATE_MATCH_TOLERANCE_BPM
             && candidateBpm > 0)
         {

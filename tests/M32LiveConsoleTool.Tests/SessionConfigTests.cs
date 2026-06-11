@@ -1,6 +1,7 @@
 using System.Linq;
 using M32LiveConsoleTool.Domain;
 using M32LiveConsoleTool.Infrastructure;
+using M32LiveConsoleTool.Modules;
 
 namespace M32LiveConsoleTool.Tests;
 
@@ -136,6 +137,79 @@ public class SessionConfigTests
         Assert.Equal(reference.AntiClipperClipThresholdDb, config.AntiClipperClipThresholdDb);
         Assert.Equal(reference.AntiClipperMaxReductionStepDb, config.AntiClipperMaxReductionStepDb);
         Assert.Equal(reference.BpmChangeHysteresis, config.BpmChangeHysteresis);
+    }
+
+    [Fact]
+    public void Sanitize_repairs_corrupt_delay_slots()
+    {
+        SessionConfig config = new SessionConfig();
+        config.DelaySlots.Add(new DelaySlotDescriptor { Slot = 0 });   // below range
+        config.DelaySlots.Add(new DelaySlotDescriptor { Slot = 9 });   // above range
+        config.DelaySlots.Add(new DelaySlotDescriptor
+        {
+            Slot = 1,
+            IsAutomatic = false,
+            ManualMs = 0.0          // DelaySlotConfig.Manual would throw on this
+        });
+        config.DelaySlots.Add(new DelaySlotDescriptor
+        {
+            Slot = 2,
+            IsAutomatic = false,
+            ManualMs = 50000.0      // beyond the console's 3000 ms cap
+        });
+        config.DelaySlots.Add(new DelaySlotDescriptor
+        {
+            Slot = 3,
+            IsAutomatic = true,
+            EffectType = (DelayEffectType)999,  // hand-edited invalid enums
+            Beat = (BeatType)999
+        });
+
+        config.Sanitize();
+
+        // Out-of-range slot numbers are gone; the rest are repaired in place.
+        Assert.Equal(3, config.DelaySlots.Count);
+        Assert.DoesNotContain(config.DelaySlots, s => s.Slot < 1 || s.Slot > 8);
+
+        DelaySlotDescriptor manualLow = config.DelaySlots.First(s => s.Slot == 1);
+        Assert.True(manualLow.ManualMs >= 1.0, "non-positive manual time must be clamped up");
+
+        DelaySlotDescriptor manualHigh = config.DelaySlots.First(s => s.Slot == 2);
+        Assert.True(manualHigh.ManualMs <= 3000.0, "manual time must be clamped to the console cap");
+
+        DelaySlotDescriptor invalidEnums = config.DelaySlots.First(s => s.Slot == 3);
+        Assert.True(Enum.IsDefined(invalidEnums.EffectType));
+        Assert.True(Enum.IsDefined(invalidEnums.Beat));
+
+        // The repaired descriptors must now build without throwing — this is the
+        // exact path Initialize takes when restoring a session at startup.
+        foreach (DelaySlotDescriptor s in config.DelaySlots)
+        {
+            if (s.IsAutomatic)
+            {
+                DelaySlotConfig.Automatic(s.EffectType, s.Beat);
+            }
+            else
+            {
+                DelaySlotConfig.Manual(s.EffectType, s.ManualMs);
+            }
+        }
+    }
+
+    [Fact]
+    public void Sanitize_resets_an_invalid_mixer_ip()
+    {
+        SessionConfig garbage = new SessionConfig { MixerIp = "not an ip" };
+        SessionConfig blank = new SessionConfig { MixerIp = "" };
+        SessionConfig valid = new SessionConfig { MixerIp = "10.1.2.3" };
+
+        garbage.Sanitize();
+        blank.Sanitize();
+        valid.Sanitize();
+
+        Assert.True(SessionConfig.IsValidMixerIp(garbage.MixerIp));
+        Assert.True(SessionConfig.IsValidMixerIp(blank.MixerIp));
+        Assert.Equal("10.1.2.3", valid.MixerIp);
     }
 
     [Fact]

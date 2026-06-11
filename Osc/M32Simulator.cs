@@ -100,6 +100,14 @@ public class M32Simulator
     private readonly Dictionary<string, float> faderByAddress = new Dictionary<string, float>();
     private readonly object faderLock = new object();
 
+    /// <summary>
+    /// Last mute (on/off) value written per <c>/mix/on</c> address, so a later
+    /// query reads back what the client wrote, as the real console would. Devices
+    /// never written default to 1 (on/audible).
+    /// </summary>
+    private readonly Dictionary<string, int> muteByAddress = new Dictionary<string, int>();
+    private readonly object muteLock = new object();
+
     /// <summary>Remote endpoint of the last received message, used to send replies back.</summary>
     private IPEndPoint? lastSenderEndpoint;
 
@@ -425,7 +433,7 @@ public class M32Simulator
         if (address.StartsWith("/headamp/", StringComparison.Ordinal)
             && address.EndsWith("/gain", StringComparison.Ordinal))
         {
-            return FaderMath.Normalize(0.0, M32Buckets.HeadAmpGainMinDb, M32Buckets.HeadAmpGainMaxDb);
+            return FaderMath.Normalize(0.0, M32Buckets.HEAD_AMP_GAIN_MIN_DB, M32Buckets.HEAD_AMP_GAIN_MAX_DB);
         }
         return SIM_REFERENCE_FADER;
     }
@@ -493,9 +501,10 @@ public class M32Simulator
     }
 
     /// <summary>
-    /// Answers a <c>/ch|bus/XX/mix/on</c> query. The simulator never mutes anything,
-    /// so it reports 1 (on/audible) unless a value was explicitly written, which it
-    /// then echoes back.
+    /// Handles a <c>/ch|bus/XX/mix/on</c> message. A write (int argument) is stored
+    /// and echoed back, as the real console does under /xremote; a query (no
+    /// argument) answers the stored value, defaulting to 1 (on/audible) for devices
+    /// never written.
     /// </summary>
     private void HandleMuteQuery(OscMessage message)
     {
@@ -504,10 +513,21 @@ public class M32Simulator
             return;
         }
 
-        int on = 1;
+        int on;
         if (message.Arguments.Count > 0 && message.Arguments[0] is int written)
         {
+            lock (muteLock)
+            {
+                muteByAddress[message.Address] = written;
+            }
             on = written;
+        }
+        else
+        {
+            lock (muteLock)
+            {
+                on = muteByAddress.TryGetValue(message.Address, out int stored) ? stored : 1;
+            }
         }
 
         OscMessage reply = new OscMessage(message.Address, ",i", new List<object> { on });
@@ -635,11 +655,11 @@ public class M32Simulator
     /// </summary>
     private float[] GenerateMetersForSubscription(Subscription sub)
     {
-        if (sub.SourcePath == M32Buckets.ChannelStrip)
+        if (sub.SourcePath == M32Buckets.CHANNEL_STRIP)
         {
             return GenerateChannelStripFloats(sub);
         }
-        if (sub.SourcePath == M32Buckets.MixBusPage)
+        if (sub.SourcePath == M32Buckets.MIX_BUS_PAGE)
         {
             return GenerateMixBusFloats();
         }
@@ -683,7 +703,7 @@ public class M32Simulator
     /// </summary>
     private float[] GenerateMixBusFloats()
     {
-        int size = M32Buckets.MixBusPageFloatCount;
+        int size = M32Buckets.MIX_BUS_PAGE_FLOAT_COUNT;
         float[] result = new float[size];
 
         double inputDb = CurrentSimulatedDb();
@@ -748,7 +768,7 @@ public class M32Simulator
                 : DefaultNormalizedFor(address);
         }
         return FaderMath.Denormalize(
-            normalized, M32Buckets.HeadAmpGainMinDb, M32Buckets.HeadAmpGainMaxDb);
+            normalized, M32Buckets.HEAD_AMP_GAIN_MIN_DB, M32Buckets.HEAD_AMP_GAIN_MAX_DB);
     }
 
     /// <summary>

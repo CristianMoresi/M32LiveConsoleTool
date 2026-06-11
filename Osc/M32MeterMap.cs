@@ -24,19 +24,19 @@ public static class M32Buckets
     /// Address of the bus/matrix/main/mono page bundle. A single subscription to
     /// this bundle covers every bus on the console at once.
     /// </summary>
-    public const string MixBusPage = "/meters/2";
+    public const string MIX_BUS_PAGE = "/meters/2";
 
     /// <summary>Total number of floats returned by the bus-page bundle.</summary>
-    public const int MixBusPageFloatCount = 49;
+    public const int MIX_BUS_PAGE_FLOAT_COUNT = 49;
 
     /// <summary>
     /// Address of the channel-strip inspection bundle. Subscribing to this bundle
     /// brings the 4 internal floats of ONE individual channel.
     /// </summary>
-    public const string ChannelStrip = "/meters/6";
+    public const string CHANNEL_STRIP = "/meters/6";
 
     /// <summary>Total number of floats returned by the channel-strip bundle.</summary>
-    public const int ChannelStripFloatCount = 4;
+    public const int CHANNEL_STRIP_FLOAT_COUNT = 4;
 
     // ─────────────────────────────────────────────────────────────────────
     // App subscription aliases
@@ -47,24 +47,24 @@ public static class M32Buckets
     /// they do not clash with aliases from other clients on the same console and
     /// lets any module recognize that an incoming OSC message belongs to this app.
     /// </summary>
-    public const string AppAliasPrefix = "/m32lct_";
+    public const string APP_ALIAS_PREFIX = "/m32lct_";
 
     /// <summary>
     /// Infix added to the prefix to build a specific channel's alias. The full
-    /// alias is <c>AppAliasPrefix + ChannelAliasInfix + channelNumber</c> with the
+    /// alias is <c>APP_ALIAS_PREFIX + CHANNEL_ALIAS_INFIX + channelNumber</c> with the
     /// channel number as two digits. Example: <c>/m32lct_ch05</c>.
     /// </summary>
-    public const string ChannelAliasInfix = "ch";
+    public const string CHANNEL_ALIAS_INFIX = "ch";
 
     /// <summary>
     /// Suffix of the single bus-page subscription alias. Combined with the prefix
     /// it yields <c>/m32lct_buses</c>.
     /// </summary>
-    public const string BusesAliasSuffix = "buses";
+    public const string BUSES_ALIAS_SUFFIX = "buses";
 
     /// <summary>
     /// Converts the user-facing channel number (1..32) to the internal id the
-    /// console expects when subscribing to the <see cref="ChannelStrip"/> bundle
+    /// console expects when subscribing to the <see cref="CHANNEL_STRIP"/> bundle
     /// (0..31). The M32 shows channels 1-32 to the engineer but addresses them
     /// from zero internally over OSC.
     /// </summary>
@@ -86,7 +86,7 @@ public static class M32Buckets
     /// </summary>
     public static string BuildChannelAlias(int userChannelNumber)
     {
-        return $"{AppAliasPrefix}{ChannelAliasInfix}{userChannelNumber:D2}";
+        return $"{APP_ALIAS_PREFIX}{CHANNEL_ALIAS_INFIX}{userChannelNumber:D2}";
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -94,19 +94,29 @@ public static class M32Buckets
     // ─────────────────────────────────────────────────────────────────────
 
     /// <summary>Minimum head amp gain in dB. The OSC value is normalized over this range.</summary>
-    public const double HeadAmpGainMinDb = -12.0;
+    public const double HEAD_AMP_GAIN_MIN_DB = -12.0;
 
     /// <summary>Maximum head amp gain in dB.</summary>
-    public const double HeadAmpGainMaxDb = 60.0;
+    public const double HEAD_AMP_GAIN_MAX_DB = 60.0;
+
+    /// <summary>
+    /// Gain step the console quantizes the head amp to (linf [-12, 60, 0.5]).
+    /// Values written between steps are rounded by the console, so the app
+    /// quantizes locally too and its state matches the console exactly.
+    /// </summary>
+    public const double HEAD_AMP_GAIN_STEP_DB = 0.5;
 
     /// <summary>Minimum channel digital trim in dB (used when the source has no head amp).</summary>
-    public const double ChannelTrimMinDb = -18.0;
+    public const double CHANNEL_TRIM_MIN_DB = -18.0;
 
     /// <summary>Maximum channel digital trim in dB.</summary>
-    public const double ChannelTrimMaxDb = 18.0;
+    public const double CHANNEL_TRIM_MAX_DB = 18.0;
+
+    /// <summary>Trim step the console quantizes the digital trim to (linf [-18, 18, 0.25]).</summary>
+    public const double CHANNEL_TRIM_STEP_DB = 0.25;
 
     /// <summary>Value of <c>/-ha/NN/index</c> meaning "no analog head amp" (digital/internal source).</summary>
-    public const int NoHeadAmp = -1;
+    public const int NO_HEAD_AMP = -1;
 
     /// <summary>
     /// Address that asks the console which head amp feeds an input. The reply

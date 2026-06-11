@@ -56,6 +56,15 @@ public abstract class AudioDevice
     protected readonly List<MeterSample> sampleHistory;
 
     /// <summary>
+    /// Cached OSC addresses. The OSC number never changes after construction, so
+    /// the addresses are built once on first use instead of re-interpolating a
+    /// string on every received message (the receive thread compares them against
+    /// every incoming fader/mute address).
+    /// </summary>
+    private string? oscAddressCache;
+    private string? muteOscAddressCache;
+
+    /// <summary>
     /// Lock guarding access to the sample history between the thread that appends
     /// samples (OSC receive) and the threads that read them (AutoLeveler,
     /// AntiClipper, etc.).
@@ -169,16 +178,35 @@ public abstract class AudioDevice
     public abstract void ApplyCorrection(double deltaDb);
 
     /// <summary>
-    /// Returns the device's fader OSC address according to its type.
+    /// Builds the device's fader OSC address according to its type. Called once;
+    /// the result is cached by <see cref="GetOscAddress"/>.
     /// </summary>
     /// <returns>OSC path, e.g. <c>/ch/01/mix/fader</c> or <c>/bus/03/mix/fader</c>.</returns>
-    public abstract string GetOscAddress();
+    protected abstract string BuildOscAddress();
 
     /// <summary>
-    /// Returns the device's mute (on/off) OSC address according to its type.
+    /// Builds the device's mute (on/off) OSC address according to its type. Called
+    /// once; the result is cached by <see cref="GetMuteOscAddress"/>.
     /// </summary>
     /// <returns>OSC path, e.g. <c>/ch/01/mix/on</c> or <c>/bus/03/mix/on</c>.</returns>
-    public abstract string GetMuteOscAddress();
+    protected abstract string BuildMuteOscAddress();
+
+    /// <summary>
+    /// Returns the device's fader OSC address, built once and cached (the OSC
+    /// number is fixed for the device's lifetime).
+    /// </summary>
+    public string GetOscAddress()
+    {
+        return oscAddressCache ??= BuildOscAddress();
+    }
+
+    /// <summary>
+    /// Returns the device's mute (on/off) OSC address, built once and cached.
+    /// </summary>
+    public string GetMuteOscAddress()
+    {
+        return muteOscAddressCache ??= BuildMuteOscAddress();
+    }
 
     // ─────────────────────────────────────────────────────────────────────
     // Methods common to all subclasses

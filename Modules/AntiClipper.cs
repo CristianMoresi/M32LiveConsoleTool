@@ -101,6 +101,15 @@ public class AntiClipper
     /// <summary>Time of the last reduction per channel. <c>null</c> = never, or out of cooldown.</summary>
     private ConcurrentDictionary<MixerChannel, DateTime?> lastClipAtByChannel;
 
+    /// <summary>
+    /// <c>true</c> while a channel has already been warned that its gain sits at the
+    /// console's minimum and the clipping persists. Reset when the channel stops
+    /// clipping (or a real reduction is applied again), so the "manual action
+    /// required" warning is logged once per clipping episode instead of repeating
+    /// every cooldown with no effect.
+    /// </summary>
+    private ConcurrentDictionary<MixerChannel, bool> minGainWarnedByChannel;
+
     /// <summary>Timestamp of the last processed sample per channel (de-duplication).</summary>
     private ConcurrentDictionary<MixerChannel, DateTime?> lastSeenTimestampByChannel;
 
@@ -129,42 +138,12 @@ public class AntiClipper
         int confirmationSamples = DEFAULT_CONFIRMATION_SAMPLES,
         int cooldownMs = DEFAULT_COOLDOWN_MS)
     {
-        if (clipThresholdDb > 0 || clipThresholdDb < -20)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(clipThresholdDb),
-                "Clip threshold must be between -20 and 0 dB.");
-        }
-        if (reductionStepDb < 0.1 || reductionStepDb > 12)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(reductionStepDb),
-                "Normal reduction step must be between 0.1 and 12 dB.");
-        }
-        if (maxReductionStepDb < reductionStepDb || maxReductionStepDb > 12)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(maxReductionStepDb),
-                "Aggressive step must be >= normal step and no greater than 12 dB.");
-        }
-        if (severeOvershootDb < 1 || severeOvershootDb > 18)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(severeOvershootDb),
-                "Severe-overshoot threshold must be between 1 and 18 dB.");
-        }
-        if (confirmationSamples < 1 || confirmationSamples > 20)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(confirmationSamples),
-                "Confirmation samples must be between 1 and 20.");
-        }
-        if (cooldownMs < 100 || cooldownMs > 30000)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(cooldownMs),
-                "Cooldown must be between 100 ms and 30 s.");
-        }
+        ValidateClipThreshold(clipThresholdDb);
+        ValidateReductionStep(reductionStepDb, maxReductionStepDb);
+        ValidateMaxReductionStep(maxReductionStepDb, reductionStepDb);
+        ValidateSevereOvershoot(severeOvershootDb);
+        ValidateConfirmationSamples(confirmationSamples);
+        ValidateCooldown(cooldownMs);
 
         this.oscClient = oscClient;
         this.meterReader = meterReader;
@@ -183,6 +162,7 @@ public class AntiClipper
         this.lastClipAtByChannel = new ConcurrentDictionary<MixerChannel, DateTime?>();
         this.lastSeenTimestampByChannel = new ConcurrentDictionary<MixerChannel, DateTime?>();
         this.queueLockByChannel = new ConcurrentDictionary<MixerChannel, object>();
+        this.minGainWarnedByChannel = new ConcurrentDictionary<MixerChannel, bool>();
 
         foreach (MixerChannel channel in channels)
         {
@@ -199,45 +179,113 @@ public class AntiClipper
         get { return channels.AsReadOnly(); }
     }
 
+    /// <remarks>
+    /// The setters apply the same validation as the constructor, so a live edit
+    /// can never put the module in a state the constructor would have rejected.
+    /// </remarks>
     public double ClipThresholdDb
     {
         get { return clipThresholdDb; }
-        set { clipThresholdDb = value; }
+        set { ValidateClipThreshold(value); clipThresholdDb = value; }
     }
 
     public double ReductionStepDb
     {
         get { return reductionStepDb; }
-        set { reductionStepDb = value; }
+        set { ValidateReductionStep(value, maxReductionStepDb); reductionStepDb = value; }
     }
 
     public double MaxReductionStepDb
     {
         get { return maxReductionStepDb; }
-        set { maxReductionStepDb = value; }
+        set { ValidateMaxReductionStep(value, reductionStepDb); maxReductionStepDb = value; }
     }
 
     public double SevereOvershootDb
     {
         get { return severeOvershootDb; }
-        set { severeOvershootDb = value; }
+        set { ValidateSevereOvershoot(value); severeOvershootDb = value; }
     }
 
     public int ConfirmationSamples
     {
         get { return confirmationSamples; }
-        set { confirmationSamples = value; }
+        set { ValidateConfirmationSamples(value); confirmationSamples = value; }
     }
 
     public int CooldownMs
     {
         get { return cooldownMs; }
-        set { cooldownMs = value; }
+        set { ValidateCooldown(value); cooldownMs = value; }
     }
 
     public bool IsEnabled
     {
         get { return isEnabled; }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Parameter validation (shared by the constructor and the setters)
+    // ─────────────────────────────────────────────────────────────────────
+
+    private static void ValidateClipThreshold(double clipThresholdDb)
+    {
+        if (clipThresholdDb > 0 || clipThresholdDb < -20)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(clipThresholdDb),
+                "Clip threshold must be between -20 and 0 dB.");
+        }
+    }
+
+    private static void ValidateReductionStep(double reductionStepDb, double maxReductionStepDb)
+    {
+        if (reductionStepDb < 0.1 || reductionStepDb > 12 || reductionStepDb > maxReductionStepDb)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(reductionStepDb),
+                "Normal reduction step must be between 0.1 and 12 dB and no greater than the aggressive step.");
+        }
+    }
+
+    private static void ValidateMaxReductionStep(double maxReductionStepDb, double reductionStepDb)
+    {
+        if (maxReductionStepDb < reductionStepDb || maxReductionStepDb > 12)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxReductionStepDb),
+                "Aggressive step must be >= normal step and no greater than 12 dB.");
+        }
+    }
+
+    private static void ValidateSevereOvershoot(double severeOvershootDb)
+    {
+        if (severeOvershootDb < 1 || severeOvershootDb > 18)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(severeOvershootDb),
+                "Severe-overshoot threshold must be between 1 and 18 dB.");
+        }
+    }
+
+    private static void ValidateConfirmationSamples(int confirmationSamples)
+    {
+        if (confirmationSamples < 1 || confirmationSamples > 20)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(confirmationSamples),
+                "Confirmation samples must be between 1 and 20.");
+        }
+    }
+
+    private static void ValidateCooldown(int cooldownMs)
+    {
+        if (cooldownMs < 100 || cooldownMs > 30000)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(cooldownMs),
+                "Cooldown must be between 100 ms and 30 s.");
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -290,6 +338,7 @@ public class AntiClipper
             lastClipAtByChannel.TryRemove(channel, out _);
             lastSeenTimestampByChannel.TryRemove(channel, out _);
             queueLockByChannel.TryRemove(channel, out _);
+            minGainWarnedByChannel.TryRemove(channel, out _);
         }
 
         logger.LogEvent(
@@ -306,6 +355,7 @@ public class AntiClipper
         lastClipAtByChannel[channel] = null;
         lastSeenTimestampByChannel[channel] = null;
         queueLockByChannel[channel] = new object();
+        minGainWarnedByChannel[channel] = false;
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -446,7 +496,10 @@ public class AntiClipper
         }
         else
         {
+            // The clipping episode is over: clear the confirmation history and
+            // re-arm the at-minimum warning for the next episode.
             ClearClipHistory(channel);
+            minGainWarnedByChannel[channel] = false;
         }
     }
 
@@ -560,10 +613,43 @@ public class AntiClipper
 
     /// <summary>
     /// Applies the reduction with an adaptive step: normal step if the overshoot
-    /// is small, aggressive step if it is severe.
+    /// is small, aggressive step if it is severe. The resulting gain is clamped to
+    /// the console's physical minimum and quantized to its gain grid (0.5 dB steps
+    /// for a head amp, 0.25 dB for the digital trim), so the stored value, the log
+    /// and the console agree from the first write. If the gain already sits at the
+    /// minimum, no redundant write is sent; instead a single "manual action
+    /// required" warning is logged per clipping episode.
     /// </summary>
     private void ApplyAdaptiveReduction(MixerChannel channel, double peakClipDb)
     {
+        bool hasHeadAmp = channel.HeadAmpIndex >= 0;
+        double minGain = hasHeadAmp
+            ? M32Buckets.HEAD_AMP_GAIN_MIN_DB
+            : M32Buckets.CHANNEL_TRIM_MIN_DB;
+        double gainStep = hasHeadAmp
+            ? M32Buckets.HEAD_AMP_GAIN_STEP_DB
+            : M32Buckets.CHANNEL_TRIM_STEP_DB;
+
+        double previousGain = channel.PreampGain;
+
+        // Already at the console's minimum: a further reduction is impossible.
+        // Re-sending the same value and logging "reductions" that reduce nothing
+        // would only flood the dashboard; warn once per episode that the engineer
+        // has to act (back the source off, pad the mic, swap the DI).
+        if (previousGain <= minGain)
+        {
+            if (minGainWarnedByChannel.TryGetValue(channel, out bool warned) && !warned)
+            {
+                minGainWarnedByChannel[channel] = true;
+                logger.LogEvent(
+                    $"AntiClipper|{channel.Name}|at minimum gain ({minGain:F1}dB) and still clipping" +
+                    $"|peak={peakClipDb:+0.0;-0.0}dBFS|manual action required",
+                    Severity.Warning);
+            }
+            lastClipAtByChannel[channel] = DateTime.UtcNow;
+            return;
+        }
+
         double overshootDb = peakClipDb - clipThresholdDb;
 
         double stepToApply;
@@ -580,21 +666,17 @@ public class AntiClipper
             isSevere = false;
         }
 
-        double previousGain = channel.PreampGain;
-
         channel.ReducePreampGain(stepToApply);
 
-        // Clamp the internal gain to the physical minimum the console enforces, so
-        // the stored value and the log reflect what is actually applied instead of
-        // drifting below the head amp / trim range.
-        double minGain = channel.HeadAmpIndex >= 0
-            ? M32Buckets.HeadAmpGainMinDb
-            : M32Buckets.ChannelTrimMinDb;
-        if (channel.PreampGain < minGain)
-        {
-            channel.PreampGain = minGain;
-        }
+        // Clamp to the physical minimum the console enforces and quantize to its
+        // gain grid: the console rounds any in-between value anyway, so storing
+        // the rounded value keeps the local state identical to what the console
+        // will echo back.
+        double newGain = Math.Max(channel.PreampGain, minGain);
+        newGain = Math.Round(newGain / gainStep) * gainStep;
+        channel.PreampGain = Math.Max(newGain, minGain);
 
+        minGainWarnedByChannel[channel] = false;
         SendPreampUpdate(channel);
         lastClipAtByChannel[channel] = DateTime.UtcNow;
 
@@ -623,13 +705,13 @@ public class AntiClipper
         {
             oscAddress = M32Buckets.BuildHeadAmpGainAddress(channel.HeadAmpIndex);
             normalized = FaderMath.Normalize(
-                channel.PreampGain, M32Buckets.HeadAmpGainMinDb, M32Buckets.HeadAmpGainMaxDb);
+                channel.PreampGain, M32Buckets.HEAD_AMP_GAIN_MIN_DB, M32Buckets.HEAD_AMP_GAIN_MAX_DB);
         }
         else
         {
             oscAddress = M32Buckets.BuildChannelTrimAddress(channel.OscNumber);
             normalized = FaderMath.Normalize(
-                channel.PreampGain, M32Buckets.ChannelTrimMinDb, M32Buckets.ChannelTrimMaxDb);
+                channel.PreampGain, M32Buckets.CHANNEL_TRIM_MIN_DB, M32Buckets.CHANNEL_TRIM_MAX_DB);
         }
 
         OscMessage update = new OscMessage(oscAddress, ",f", new List<object> { normalized });

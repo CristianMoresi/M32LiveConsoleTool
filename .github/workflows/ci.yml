@@ -1,0 +1,43 @@
+name: CI
+
+# Build and test every pull request and every push to a non-main branch, so
+# nothing reaches main unverified. Pushes to main are covered by the Release
+# workflow, which runs the same build and test steps before publishing.
+on:
+  pull_request:
+  push:
+    branches-ignore: [ main ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SOLUTION: M32LiveConsoleTool.slnx
+  DOTNET_VERSION: '10.0.x'
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+
+jobs:
+  build-test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore
+        run: dotnet restore "$SOLUTION"
+
+      - name: Build
+        run: dotnet build "$SOLUTION" -c Release --no-restore
+
+      - name: Test
+        run: dotnet test "$SOLUTION" -c Release --no-build --verbosity normal

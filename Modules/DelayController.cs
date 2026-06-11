@@ -52,12 +52,30 @@ public class DelayController
     /// <summary>Maximum slot number supported by the M32.</summary>
     public const int MAX_SLOT_NUMBER = 8;
 
+    /// <summary>
+    /// Highest FX slot that can host a delay effect. Slots 5-8 are insert-only:
+    /// their effect list contains no delay, so only slots 1-4 are configurable.
+    /// </summary>
+    public const int MAX_DELAY_SLOT_NUMBER = 4;
+
+    /// <summary>
+    /// Interval between retries of unanswered <c>/fx/N/type</c> queries, in
+    /// milliseconds. Matches the meter reader's renew cadence.
+    /// </summary>
+    private const int FX_RETRY_INTERVAL_MS = 8000;
+
+    /// <summary>Sleep granularity inside the retry loop.</summary>
+    private const int FX_RETRY_SLEEP_TICK_MS = 100;
+
     // ─────────────────────────────────────────────────────────────────────
     // Private fields
     // ─────────────────────────────────────────────────────────────────────
 
     private OscClient oscClient;
     private ShowLogger logger;
+
+    /// <summary>Thread that re-sends unanswered <c>/fx/N/type</c> queries.</summary>
+    private Thread? fxRetryThread;
 
     /// <summary>
     /// Per-slot configurations (mode and figure/ms). A
@@ -130,9 +148,14 @@ public class DelayController
         isRunning = true;
         oscClient.MessageReceived += OnMessageReceived;
         RefreshEffects();
+
+        fxRetryThread = new Thread(FxRetryLoop);
+        fxRetryThread.IsBackground = true;
+        fxRetryThread.Name = "DelayController-FxRetry";
+        fxRetryThread.Start();
     }
 
-    /// <summary>Stops listening for effect replies.</summary>
+    /// <summary>Stops listening for effect replies and stops the retry thread.</summary>
     public void Stop()
     {
         if (!isRunning)
@@ -142,6 +165,12 @@ public class DelayController
 
         isRunning = false;
         oscClient.MessageReceived -= OnMessageReceived;
+
+        if (fxRetryThread != null && fxRetryThread.IsAlive)
+        {
+            fxRetryThread.Join(1000);
+            fxRetryThread = null;
+        }
     }
 
     /// <summary>
@@ -153,8 +182,47 @@ public class DelayController
     {
         for (int slot = MIN_SLOT_NUMBER; slot <= MAX_SLOT_NUMBER; slot++)
         {
-            OscMessage query = new OscMessage($"/fx/{slot}/type", ",", new List<object>());
-            oscClient.Send(query);
+            QueryFxType(slot);
+        }
+    }
+
+    /// <summary>Sends a single <c>/fx/N/type</c> query.</summary>
+    private void QueryFxType(int slot)
+    {
+        OscMessage query = new OscMessage($"/fx/{slot}/type", ",", new List<object>());
+        oscClient.Send(query);
+    }
+
+    /// <summary>
+    /// Retry loop: while any FX slot has no detected effect, periodically re-sends
+    /// its <c>/fx/N/type</c> query. A startup query lost over UDP would otherwise
+    /// leave the slot undetected for the whole show (writing delay times via the
+    /// configured fallback type instead of the real one) until the engineer
+    /// manually refreshed. A no-op once all eight slots have answered.
+    /// </summary>
+    private void FxRetryLoop()
+    {
+        int ticksPerInterval = FX_RETRY_INTERVAL_MS / FX_RETRY_SLEEP_TICK_MS;
+
+        while (isRunning)
+        {
+            for (int i = 0; i < ticksPerInterval && isRunning; i++)
+            {
+                Thread.Sleep(FX_RETRY_SLEEP_TICK_MS);
+            }
+
+            if (!isRunning)
+            {
+                break;
+            }
+
+            for (int slot = MIN_SLOT_NUMBER; slot <= MAX_SLOT_NUMBER; slot++)
+            {
+                if (!detectedEffects.ContainsKey(slot))
+                {
+                    QueryFxType(slot);
+                }
+            }
         }
     }
 
@@ -356,7 +424,7 @@ public class DelayController
         int timeParameter = DelayEffects.TimeParameterNumber(effectType);
         string oscAddress = $"/fx/{slot}/par/{timeParameter:D2}";
 
-        float normalized = FaderMath.Normalize(timeMs, DelayEffects.TimeMinMs, DelayEffects.TimeMaxMs);
+        float normalized = FaderMath.Normalize(timeMs, DelayEffects.TIME_MIN_MS, DelayEffects.TIME_MAX_MS);
 
         OscMessage message = new OscMessage(
             oscAddress,

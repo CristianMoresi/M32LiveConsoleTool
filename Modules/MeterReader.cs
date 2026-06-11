@@ -112,6 +112,12 @@ public class MeterReader
     /// </summary>
     public MeterReader(OscClient oscClient, List<AudioDevice> devices, int windowMs)
     {
+        if (windowMs < 100 || windowMs > 10000)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(windowMs), "Meter window must be between 100 and 10000 ms.");
+        }
+
         this.oscClient = oscClient;
         this.devices = new List<AudioDevice>(devices);
         this.windowMs = windowMs;
@@ -135,10 +141,23 @@ public class MeterReader
         get { return devices.AsReadOnly(); }
     }
 
+    /// <summary>
+    /// Moving-average window in milliseconds. The setter validates the same
+    /// 100-10000 ms range <see cref="Infrastructure.SessionConfig.Sanitize"/>
+    /// enforces when loading from disk.
+    /// </summary>
     public int WindowMs
     {
         get { return windowMs; }
-        set { windowMs = value; }
+        set
+        {
+            if (value < 100 || value > 10000)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(value), "Meter window must be between 100 and 10000 ms.");
+            }
+            windowMs = value;
+        }
     }
 
     /// <summary>
@@ -226,6 +245,18 @@ public class MeterReader
 
         lock (devicesLock)
         {
+            // The console behind the IP may be a different desk with different
+            // routing, so the head amp resolution must be re-established from
+            // scratch (BuildAllSubscriptions re-sends every /-ha query, and the
+            // renew thread retries any that go unanswered).
+            foreach (AudioDevice device in devices)
+            {
+                if (device is MixerChannel channel)
+                {
+                    channel.HeadAmpResolved = false;
+                }
+            }
+
             BuildAllSubscriptions();
             QueryAllInitialState();
         }
@@ -488,7 +519,7 @@ public class MeterReader
             new List<object>
             {
                 alias,
-                M32Buckets.ChannelStrip,
+                M32Buckets.CHANNEL_STRIP,
                 oscChannelId,
                 0,
                 FULL_SPEED_TIME_FACTOR
@@ -524,7 +555,7 @@ public class MeterReader
     /// </summary>
     private void SubscribeBusPage()
     {
-        busesAlias = $"{M32Buckets.AppAliasPrefix}{M32Buckets.BusesAliasSuffix}";
+        busesAlias = $"{M32Buckets.APP_ALIAS_PREFIX}{M32Buckets.BUSES_ALIAS_SUFFIX}";
 
         OscMessage subscribe = new OscMessage(
             "/batchsubscribe",
@@ -532,9 +563,9 @@ public class MeterReader
             new List<object>
             {
                 busesAlias,
-                M32Buckets.MixBusPage,
+                M32Buckets.MIX_BUS_PAGE,
                 0,
-                M32Buckets.MixBusPageFloatCount - 1,
+                M32Buckets.MIX_BUS_PAGE_FLOAT_COUNT - 1,
                 FULL_SPEED_TIME_FACTOR
             });
 
@@ -573,12 +604,34 @@ public class MeterReader
     }
 
     /// <summary>
-    /// Sends <c>/renew</c> with no arguments to refresh all active subscriptions.
-    /// Invoked periodically by the renew thread.
+    /// Refreshes every active subscription by sending <c>/renew ,s &lt;alias&gt;</c>
+    /// once per alias. Invoked periodically by the renew thread.
     /// </summary>
+    /// <remarks>
+    /// The protocol documents <c>/renew</c> only with an alias argument (an
+    /// argument-less form exists for <c>/unsubscribe</c>, but not for renew), so
+    /// each alias is renewed individually. The cost is one tiny datagram per
+    /// watched channel plus one for the bus page every cycle — negligible — and it
+    /// removes any dependence on undocumented firmware behavior.
+    /// </remarks>
     private void SendRenewAll()
     {
-        OscMessage renew = new OscMessage("/renew", ",", new List<object>());
+        foreach (string alias in channelByAlias.Keys)
+        {
+            SendRenewAlias(alias);
+        }
+
+        string buses = busesAlias;
+        if (!string.IsNullOrEmpty(buses))
+        {
+            SendRenewAlias(buses);
+        }
+    }
+
+    /// <summary>Sends a single <c>/renew ,s &lt;alias&gt;</c> message.</summary>
+    private void SendRenewAlias(string alias)
+    {
+        OscMessage renew = new OscMessage("/renew", ",s", new List<object> { alias });
         oscClient.Send(renew);
     }
 
@@ -622,6 +675,7 @@ public class MeterReader
                 // Healthy link: just refresh the existing subscriptions cheaply.
                 SendRenewAll();
                 RequeryUninitializedFaders();
+                RequeryUnresolvedHeadAmps();
             }
             else
             {
@@ -648,6 +702,26 @@ public class MeterReader
             if (!device.FaderInitialized)
             {
                 QueryDeviceFader(device);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Re-sends the head amp query for any watched channel whose
+    /// <c>/-ha/NN/index</c> reply has not arrived, in case the startup query was
+    /// lost over UDP. Without the retry, a single lost datagram would leave the
+    /// AntiClipper attenuating the channel's digital trim instead of its real
+    /// analog head amp for the rest of the session. Normally a no-op once every
+    /// channel is resolved (a genuine -1 "digital source" answer also counts as
+    /// resolved).
+    /// </summary>
+    private void RequeryUnresolvedHeadAmps()
+    {
+        foreach (AudioDevice device in devices)
+        {
+            if (device is MixerChannel channel && !channel.HeadAmpResolved)
+            {
+                QueryChannelHeadAmp(channel);
             }
         }
     }
@@ -681,7 +755,7 @@ public class MeterReader
             return;
         }
 
-        if (!message.Address.StartsWith(M32Buckets.AppAliasPrefix))
+        if (!message.Address.StartsWith(M32Buckets.APP_ALIAS_PREFIX))
         {
             return;
         }
@@ -836,6 +910,7 @@ public class MeterReader
                 if (channel != null)
                 {
                     channel.HeadAmpIndex = headAmpIndex;
+                    channel.HeadAmpResolved = true; // even -1 (digital source) is a definitive answer
                     if (headAmpIndex >= 0)
                     {
                         QueryHeadAmpGain(headAmpIndex); // seed the real gain
@@ -855,7 +930,7 @@ public class MeterReader
                 if (channel != null)
                 {
                     channel.PreampGain = FaderMath.Denormalize(
-                        normalized, M32Buckets.HeadAmpGainMinDb, M32Buckets.HeadAmpGainMaxDb);
+                        normalized, M32Buckets.HEAD_AMP_GAIN_MIN_DB, M32Buckets.HEAD_AMP_GAIN_MAX_DB);
                 }
             }
             return true;
@@ -901,7 +976,13 @@ public class MeterReader
         return null;
     }
 
-    private float[] ParseMeterBlob(byte[] blob)
+    /// <summary>
+    /// Decodes an M32 meter blob: a 32-bit little-endian float count followed by
+    /// that many little-endian floats. Returns an empty array for any malformed
+    /// blob (truncated, negative count, or a declared count larger than the
+    /// payload). Internal so the malformed-packet guards are unit-testable.
+    /// </summary>
+    internal static float[] ParseMeterBlob(byte[] blob)
     {
         if (blob.Length < 4)
         {

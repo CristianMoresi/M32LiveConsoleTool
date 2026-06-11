@@ -134,36 +134,11 @@ public class AutoLeveler
         double dropLimitDb,
         int cycleIntervalMs)
     {
-        if (thresholdDb <= 0)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(thresholdDb),
-                "The action threshold must be positive.");
-        }
-        if (slewUpDbPerSec <= 0)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(slewUpDbPerSec),
-                "The upward slew rate must be positive.");
-        }
-        if (slewDownDbPerSec <= 0)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(slewDownDbPerSec),
-                "The downward slew rate must be positive.");
-        }
-        if (dropLimitDb <= 0)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(dropLimitDb),
-                "The drop limit must be positive.");
-        }
-        if (cycleIntervalMs < 10 || cycleIntervalMs > 5000)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(cycleIntervalMs),
-                "The cycle interval must be between 10 and 5000 ms.");
-        }
+        ValidateThreshold(thresholdDb);
+        ValidateSlew(slewUpDbPerSec, "upward");
+        ValidateSlew(slewDownDbPerSec, "downward");
+        ValidateDropLimit(dropLimitDb);
+        ValidateCycleInterval(cycleIntervalMs);
 
         this.oscClient = oscClient;
         this.meterReader = meterReader;
@@ -200,24 +175,28 @@ public class AutoLeveler
         get { return devices.AsReadOnly(); }
     }
 
+    /// <remarks>
+    /// The setters apply the same validation as the constructor, so a live edit
+    /// can never put the module in a state the constructor would have rejected.
+    /// </remarks>
     public double ThresholdDb
     {
         get { return thresholdDb; }
-        set { thresholdDb = value; }
+        set { ValidateThreshold(value); thresholdDb = value; }
     }
 
     /// <summary>Maximum upward correction rate (dB/s), used when raising a low level.</summary>
     public double SlewUpDbPerSec
     {
         get { return slewUpDbPerSec; }
-        set { slewUpDbPerSec = value; }
+        set { ValidateSlew(value, "upward"); slewUpDbPerSec = value; }
     }
 
     /// <summary>Maximum downward correction rate (dB/s), used when lowering a high level.</summary>
     public double SlewDownDbPerSec
     {
         get { return slewDownDbPerSec; }
-        set { slewDownDbPerSec = value; }
+        set { ValidateSlew(value, "downward"); slewDownDbPerSec = value; }
     }
 
     public double GateThresholdDb
@@ -229,13 +208,57 @@ public class AutoLeveler
     public double DropLimitDb
     {
         get { return dropLimitDb; }
-        set { dropLimitDb = value; }
+        set { ValidateDropLimit(value); dropLimitDb = value; }
     }
 
     public int CycleIntervalMs
     {
         get { return cycleIntervalMs; }
-        set { cycleIntervalMs = value; }
+        set { ValidateCycleInterval(value); cycleIntervalMs = value; }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Parameter validation (shared by the constructor and the setters)
+    // ─────────────────────────────────────────────────────────────────────
+
+    private static void ValidateThreshold(double thresholdDb)
+    {
+        if (thresholdDb <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(thresholdDb),
+                "The action threshold must be positive.");
+        }
+    }
+
+    private static void ValidateSlew(double slewDbPerSec, string direction)
+    {
+        if (slewDbPerSec <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(slewDbPerSec),
+                $"The {direction} slew rate must be positive.");
+        }
+    }
+
+    private static void ValidateDropLimit(double dropLimitDb)
+    {
+        if (dropLimitDb <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(dropLimitDb),
+                "The drop limit must be positive.");
+        }
+    }
+
+    private static void ValidateCycleInterval(int cycleIntervalMs)
+    {
+        if (cycleIntervalMs < 10 || cycleIntervalMs > 5000)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(cycleIntervalMs),
+                "The cycle interval must be between 10 and 5000 ms.");
+        }
     }
 
     public bool IsEnabled
@@ -537,8 +560,19 @@ public class AutoLeveler
             return true;
         }
 
-        // The wait is over: re-capture the target and clear the state.
+        // Never capture a target from silence (same guard as CaptureTargets): if
+        // the engineer moved the fader during a pause between songs, the average
+        // sits at the -90 dB floor, and capturing it would make the leveler pull
+        // the channel all the way down once the music returns. Stay in the manual
+        // stand-down (re-arming the window) until there is real signal to measure.
         double newTargetDb = meterReader.GetMovingAverage(device);
+        if (newTargetDb < gateThresholdDb)
+        {
+            manualChangeStateByDevice[device] = DateTime.UtcNow;
+            return true;
+        }
+
+        // The wait is over: re-capture the target and clear the state.
         device.TargetLevelDb = newTargetDb;
         device.LastSentFader = device.CurrentFader;
         manualChangeStateByDevice[device] = null;

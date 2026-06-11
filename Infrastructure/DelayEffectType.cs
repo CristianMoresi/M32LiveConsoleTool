@@ -38,10 +38,10 @@ public enum DelayEffectType
 public static class DelayEffects
 {
     /// <summary>Minimum delay time in milliseconds (shared by all delay effects).</summary>
-    public const double TimeMinMs = 1.0;
+    public const double TIME_MIN_MS = 1.0;
 
     /// <summary>Maximum delay time in milliseconds (shared by all delay effects).</summary>
-    public const double TimeMaxMs = 3000.0;
+    public const double TIME_MAX_MS = 3000.0;
 
     /// <summary>
     /// 1-based FX parameter number that holds the delay time for the given effect.
@@ -53,13 +53,13 @@ public static class DelayEffects
 
     /// <summary>
     /// Clamps a delay time to the range every M32 delay effect supports
-    /// (<see cref="TimeMinMs"/>..<see cref="TimeMaxMs"/>). The console saturates a
+    /// (<see cref="TIME_MIN_MS"/>..<see cref="TIME_MAX_MS"/>). The console saturates a
     /// longer time silently, so the UI uses this to show the value the console
     /// actually receives instead of an unreachable theoretical one (e.g. a whole
     /// note at a slow tempo can exceed 3000 ms).
     /// </summary>
     public static double ClampTimeMs(double timeMs)
     {
-        return Math.Clamp(timeMs, TimeMinMs, TimeMaxMs);
+        return Math.Clamp(timeMs, TIME_MIN_MS, TIME_MAX_MS);
     }
 }

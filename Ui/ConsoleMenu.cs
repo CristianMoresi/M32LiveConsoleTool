@@ -386,7 +386,7 @@ public class ConsoleMenu
                 $"  Status: {status}   Mode: {orchestrator.BpmDetector.Mode}   Channel: {orchestrator.BpmDetector.TargetChannel.Name}",
                 $"  Current BPM: {bpmText}",
                 "",
-                "  [T] Toggle   [M] Mode   [C] Target channel   [P] Parameters",
+                "  [T] Toggle   [M] Mode   [C] Target channel   [P] Parameters   [F] Figure times",
                 "  [Esc] Back"
             });
 
@@ -399,12 +399,44 @@ public class ConsoleMenu
                 case 'M': AskBpmMode(); break;
                 case 'C': AskBpmTargetChannel(); break;
                 case 'P': AskBpmParameters(); break;
+                case 'F': ShowFigureTimes(); break;
             }
         }
         finally
         {
             ExitSubmenu();
         }
+    }
+
+    /// <summary>
+    /// Shows the delay time of every rhythmic figure at the established tempo —
+    /// the table an engineer mentally computes before picking a figure for a slot.
+    /// Times beyond the console's 3000 ms cap are marked, since the M32 saturates
+    /// them silently.
+    /// </summary>
+    private void ShowFigureTimes()
+    {
+        Dictionary<BeatType, double> times = orchestrator.BpmDetector.GetDelayTimes();
+        if (times.Count == 0)
+        {
+            ShowNotice("No tempo detected yet. Tap [T] in the main menu or enable the detector.");
+            return;
+        }
+
+        string Cell(BeatType beat)
+        {
+            double raw = times[beat];
+            double clamped = DelayEffects.ClampTimeMs(raw);
+            return raw > DelayEffects.TIME_MAX_MS ? $"{clamped,4:F0}ms*" : $"{clamped,4:F0}ms ";
+        }
+
+        ShowNotice(
+            $"Delay times at {orchestrator.BpmDetector.CurrentBpm:F1} BPM (* = capped at the console's 3000 ms):",
+            $"  Whole    {Cell(BeatType.Whole)}  dotted {Cell(BeatType.DottedWhole)}  triplet {Cell(BeatType.WholeTriplet)}",
+            $"  Half     {Cell(BeatType.Half)}  dotted {Cell(BeatType.DottedHalf)}  triplet {Cell(BeatType.HalfTriplet)}",
+            $"  Quarter  {Cell(BeatType.Quarter)}  dotted {Cell(BeatType.DottedQuarter)}  triplet {Cell(BeatType.QuarterTriplet)}",
+            $"  Eighth   {Cell(BeatType.Eighth)}  dotted {Cell(BeatType.DottedEighth)}  triplet {Cell(BeatType.EighthTriplet)}",
+            $"  Slapback {Cell(BeatType.Slapback)}  dotted {Cell(BeatType.DottedSlapback)}  triplet {Cell(BeatType.SlapbackTriplet)}");
     }
 
     /// <summary>
@@ -549,20 +581,15 @@ public class ConsoleMenu
                         }
                         else
                         {
-                            PaintSubmenu(new string[] { "Invalid IP address. The mixer IP was not changed." });
-                            Thread.Sleep(1500);
+                            ShowNotice("Invalid IP address. The mixer IP was not changed.");
                         }
                     }
                     break;
                 case 'O':
                     bool opened = AppPaths.OpenAppDirectoryInExplorer();
-                    PaintSubmenu(new string[]
-                    {
-                        opened
-                            ? "Folder opened in the file explorer."
-                            : "Could not open the folder on this system."
-                    });
-                    Thread.Sleep(1200);
+                    ShowNotice(opened
+                        ? "Folder opened in the file explorer."
+                        : "Could not open the folder on this system.");
                     break;
                 case 'N':
                     AskResetSession();
@@ -599,13 +626,10 @@ public class ConsoleMenu
 
         orchestrator.ResetSession();
 
-        PaintSubmenu(new string[]
-        {
+        ShowNotice(
             "Session reset.",
             "",
-            "  You can add channels and buses from [N] in the main menu."
-        });
-        Thread.Sleep(1500);
+            "  You can add channels and buses from [N] in the main menu.");
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -665,8 +689,7 @@ public class ConsoleMenu
         MixerChannel channel = new MixerChannel(name, num.Value, -18.0, 0.0);
         if (!orchestrator.AddChannel(channel))
         {
-            PaintSubmenu(new string[] { $"Channel {num.Value} is already being watched." });
-            Thread.Sleep(1200);
+            ShowNotice($"Channel {num.Value} is already being watched.");
         }
     }
 
@@ -688,8 +711,7 @@ public class ConsoleMenu
         Bus bus = new Bus(name, num.Value, -18.0);
         if (!orchestrator.AddBus(bus))
         {
-            PaintSubmenu(new string[] { $"Bus {num.Value} is already being watched." });
-            Thread.Sleep(1200);
+            ShowNotice($"Bus {num.Value} is already being watched.");
         }
     }
 
@@ -725,13 +747,9 @@ public class ConsoleMenu
 
         bool renamed = orchestrator.RenameDevice(typeKeyword, num.Value, newName.Trim());
 
-        PaintSubmenu(new string[]
-        {
-            renamed
-                ? "Renamed successfully."
-                : $"No {(typeKeyword == "channel" ? "channel" : "bus")} with that number."
-        });
-        Thread.Sleep(1000);
+        ShowNotice(renamed
+            ? "Renamed successfully."
+            : $"No {(typeKeyword == "channel" ? "channel" : "bus")} with that number.");
     }
 
     /// <summary>
@@ -766,8 +784,7 @@ public class ConsoleMenu
                 }
             }
 
-            PaintSubmenu(new string[] { $"No channel {num.Value} is being watched." });
-            Thread.Sleep(1200);
+            ShowNotice($"No channel {num.Value} is being watched.");
         }
         else if (typeChar == 'B')
         {
@@ -783,8 +800,7 @@ public class ConsoleMenu
                 }
             }
 
-            PaintSubmenu(new string[] { $"No bus {num.Value} is being watched." });
-            Thread.Sleep(1200);
+            ShowNotice($"No bus {num.Value} is being watched.");
         }
     }
 
@@ -793,7 +809,9 @@ public class ConsoleMenu
     // ─────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Configures a delay slot. Asks for the slot number (1-8), the delay effect
+    /// Configures a delay slot. Asks for the slot number (1-4: slots 5-8 are
+    /// insert-only and can never hold a delay, so offering them would only
+    /// configure a slot that no delay time can ever reach), the delay effect
     /// loaded in that slot on the console (so the time hits the right parameter),
     /// the mode (automatic or manual) and the mode's parameters (rhythmic figure
     /// if automatic, milliseconds if manual).
@@ -803,7 +821,9 @@ public class ConsoleMenu
         EnterSubmenu();
         try
         {
-            int? slot = AskInt("Slot number (1-8), Esc to cancel:", 1, 8);
+            int? slot = AskInt(
+                "Slot number (1-4; slots 5-8 cannot hold delays), Esc to cancel:",
+                1, DelayController.MAX_DELAY_SLOT_NUMBER);
             if (!slot.HasValue) return;
 
             DelayEffectType? effectType = ResolveSlotEffectType(slot.Value);
@@ -1001,11 +1021,10 @@ public class ConsoleMenu
 
         List<string> lines = new List<string>
         {
-            "Detected FX effects (slots 1-4 can hold delays):",
-            ""
+            "Detected FX effects (slots 1-4 can hold delays):"
         };
 
-        for (int slot = 1; slot <= 4; slot++)
+        for (int slot = 1; slot <= DelayController.MAX_DELAY_SLOT_NUMBER; slot++)
         {
             if (detected.TryGetValue(slot, out DetectedEffect? fx))
             {
@@ -1019,8 +1038,7 @@ public class ConsoleMenu
 
         lines.Add("  Slots 5-8 are insert effects (no delays).");
 
-        PaintSubmenu(lines.ToArray());
-        Thread.Sleep(2500);
+        ShowNotice(lines.ToArray());
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -1048,14 +1066,11 @@ public class ConsoleMenu
         EnterSubmenu();
         try
         {
-            PaintSubmenu(new string[]
-            {
+            ShowNotice(
                 "ALL AUTOMATIC CONTROL RELEASED",
                 "",
                 "  AutoLeveler, Anti-Clip and BPM Detector are now OFF.",
-                "  Faders and preamps are left exactly where they are."
-            });
-            Thread.Sleep(1200);
+                "  Faders and preamps are left exactly where they are.");
         }
         finally
         {
@@ -1078,8 +1093,7 @@ public class ConsoleMenu
                 "  Wait 2 seconds without touching anything to capture levels."
             });
             orchestrator.RecalibrateTargets();
-            PaintSubmenu(new string[] { "Recalibration complete." });
-            Thread.Sleep(800);
+            ShowNotice("Recalibration complete.");
         }
         finally
         {
@@ -1102,13 +1116,12 @@ public class ConsoleMenu
             try
             {
                 orchestrator.SavePresetAs(name.Trim());
-                PaintSubmenu(new string[] { $"Saved as preset '{name.Trim()}'." });
+                ShowNotice($"Saved as preset '{name.Trim()}'.");
             }
             catch (Exception ex)
             {
-                PaintSubmenu(new string[] { $"Error: {ex.Message}" });
+                ShowNotice($"Error: {ex.Message}");
             }
-            Thread.Sleep(1200);
         }
         finally
         {
@@ -1131,13 +1144,12 @@ public class ConsoleMenu
             try
             {
                 orchestrator.LoadPresetFrom(name.Trim());
-                PaintSubmenu(new string[] { $"Loaded preset '{name.Trim()}'." });
+                ShowNotice($"Loaded preset '{name.Trim()}'.");
             }
             catch (Exception ex)
             {
-                PaintSubmenu(new string[] { $"Error: {ex.Message}" });
+                ShowNotice($"Error: {ex.Message}");
             }
-            Thread.Sleep(1500);
         }
         finally
         {
@@ -1229,6 +1241,23 @@ public class ConsoleMenu
         }
     }
 
+    /// <summary>
+    /// Paints a notice and waits for a key press to dismiss it. Used for every
+    /// informational message so the operator reads it at their own pace and moves
+    /// on with a single key, instead of waiting out a fixed pause. The notice can
+    /// hold at most <see cref="ConsoleDashboard.SubmenuAreaLines"/> - 2 lines (the
+    /// last two rows hold the dismiss prompt).
+    /// </summary>
+    private void ShowNotice(params string[] lines)
+    {
+        string[] withPrompt = new string[lines.Length + 2];
+        Array.Copy(lines, withPrompt, lines.Length);
+        withPrompt[^2] = "";
+        withPrompt[^1] = "  Press any key to continue...";
+        PaintSubmenu(withPrompt);
+        Console.ReadKey(intercept: true);
+    }
+
     // ─────────────────────────────────────────────────────────────────────
     // Input helpers with cancel (Esc)
     // ─────────────────────────────────────────────────────────────────────
@@ -1309,8 +1338,7 @@ public class ConsoleMenu
             return value;
         }
 
-        PaintSubmenu(new string[] { $"Invalid value. Must be between {min} and {max}." });
-        Thread.Sleep(1200);
+        ShowNotice($"Invalid value. Must be between {min} and {max}.");
         return null;
     }
 
@@ -1338,8 +1366,7 @@ public class ConsoleMenu
             return value;
         }
 
-        PaintSubmenu(new string[] { $"Invalid value. Must be between {min} and {max}." });
-        Thread.Sleep(1200);
+        ShowNotice($"Invalid value. Must be between {min} and {max}.");
         return null;
     }
 }

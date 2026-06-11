@@ -59,6 +59,19 @@ internal static class Program
     /// </summary>
     public static void Main(string[] args)
     {
+        // The app is an interactive terminal program: the menu blocks on ReadKey
+        // and the dashboard paints the alternate screen. With stdin piped or
+        // redirected, ReadKey throws after startup; fail fast with a clear message
+        // instead.
+        if (Console.IsInputRedirected)
+        {
+            Console.Error.WriteLine(
+                "M32 Live Console Tool is interactive and needs a real terminal " +
+                "(stdin is redirected). Run it directly from a console window.");
+            Environment.ExitCode = 1;
+            return;
+        }
+
         Console.Title = "M32 Live Console Tool";
 
         AppPaths.EnsureDirectoriesExist();
@@ -75,7 +88,21 @@ internal static class Program
         }
 
         orchestrator = new AppOrchestrator();
-        orchestrator.Initialize(useSimulator);
+        try
+        {
+            orchestrator.Initialize(useSimulator);
+        }
+        catch (Exception ex)
+        {
+            // Initialization happens before the dashboard exists, so a failure here
+            // (an unreadable disk, an unforeseen config problem the sanitizer did
+            // not cover) can be reported as plain console text. Better a clear
+            // message than a raw stack trace as the first thing the user sees.
+            Console.Error.WriteLine("The program could not start:");
+            Console.Error.WriteLine($"  {ex.GetType().Name}: {ex.Message}");
+            Environment.ExitCode = 1;
+            return;
+        }
 
         Console.CancelKeyPress += OnCancelKeyPress;
         AppDomain.CurrentDomain.ProcessExit += OnProcessExit;

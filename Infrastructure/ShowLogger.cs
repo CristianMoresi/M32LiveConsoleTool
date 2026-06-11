@@ -16,7 +16,7 @@ namespace M32LiveConsoleTool.Infrastructure;
 /// </remarks>
 public class ShowLogger
 {
-    public const int RecentEventsCapacity = 50;
+    public const int RECENT_EVENTS_CAPACITY = 50;
 
     private string logPath;
     private StreamWriter? writer;
@@ -71,7 +71,7 @@ public class ShowLogger
         lock (writeLock)
         {
             recentEvents.AddLast(entry);
-            while (recentEvents.Count > RecentEventsCapacity)
+            while (recentEvents.Count > RECENT_EVENTS_CAPACITY)
             {
                 recentEvents.RemoveFirst();
             }

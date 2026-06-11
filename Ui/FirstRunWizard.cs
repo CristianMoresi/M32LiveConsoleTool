@@ -60,17 +60,17 @@ public static class FirstRunWizard
 
         config.MixerIp = AskIp(
             "M32 mixer IP",
-            SessionConfig.DefaultMixerIp);
+            SessionConfig.DEFAULT_MIXER_IP);
 
         config.MixerSendPort = AskInt(
             "Send port (where the console listens)",
-            SessionConfig.DefaultSendPort,
+            SessionConfig.DEFAULT_SEND_PORT,
             1,
             65535);
 
         config.MixerReceivePort = AskInt(
             "Receive port (where we listen to the console)",
-            SessionConfig.DefaultReceivePort,
+            SessionConfig.DEFAULT_RECEIVE_PORT,
             1,
             65535);
 
@@ -82,7 +82,7 @@ public static class FirstRunWizard
             Console.WriteLine("   The receive port must differ from the send port.");
             config.MixerReceivePort = AskInt(
                 "Receive port (where we listen to the console)",
-                SessionConfig.DefaultReceivePort,
+                SessionConfig.DEFAULT_RECEIVE_PORT,
                 1,
                 65535);
         }

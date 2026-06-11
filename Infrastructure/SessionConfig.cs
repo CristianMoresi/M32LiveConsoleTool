@@ -15,17 +15,17 @@ public class SessionConfig
     // ─────────────────────────────────────────────────────────────────────
 
     /// <summary>Placeholder mixer IP shown as the default; the user sets the real one in the wizard.</summary>
-    public const string DefaultMixerIp = "192.168.1.5";
+    public const string DEFAULT_MIXER_IP = "192.168.1.5";
 
     /// <summary>Default UDP port the M32 listens on for incoming OSC commands.</summary>
-    public const int DefaultSendPort = 10023;
+    public const int DEFAULT_SEND_PORT = 10023;
 
     /// <summary>Default UDP port the app listens on for the M32's replies and meters.</summary>
-    public const int DefaultReceivePort = 10024;
+    public const int DEFAULT_RECEIVE_PORT = 10024;
 
-    public string MixerIp { get; set; } = DefaultMixerIp;
-    public int MixerSendPort { get; set; } = DefaultSendPort;
-    public int MixerReceivePort { get; set; } = DefaultReceivePort;
+    public string MixerIp { get; set; } = DEFAULT_MIXER_IP;
+    public int MixerSendPort { get; set; } = DEFAULT_SEND_PORT;
+    public int MixerReceivePort { get; set; } = DEFAULT_RECEIVE_PORT;
 
     /// <summary>
     /// Validates that a string is a usable mixer address: a parseable IPv4 or IPv6
@@ -115,6 +115,12 @@ public class SessionConfig
     {
         SessionConfig defaults = new SessionConfig();
 
+        // Mixer address. A hand-edited file with a hostname or garbage here would
+        // leave the app silently sending to nowhere (every UDP send fails and is
+        // swallowed), showing NO SIGNAL with no clue why. Reset to the placeholder
+        // so the engineer corrects it from Preferences.
+        if (!IsValidMixerIp(MixerIp)) MixerIp = defaults.MixerIp;
+
         // Network ports.
         if (MixerSendPort < 1 || MixerSendPort > 65535) MixerSendPort = defaults.MixerSendPort;
         if (MixerReceivePort < 1 || MixerReceivePort > 65535) MixerReceivePort = defaults.MixerReceivePort;
@@ -144,10 +150,11 @@ public class SessionConfig
         BpmChangeHysteresis = Math.Clamp(BpmChangeHysteresis, 0.0, 20.0);
 
         // Repair the watched-device list (drop unknown types, out-of-range numbers
-        // and duplicates) and drop duplicate delay slots. These can only come from a
+        // and duplicates) and the delay slots (out-of-range slot numbers, invalid
+        // enums, non-positive manual times, duplicates). These can only come from a
         // hand-edited file; the live menus already prevent them.
         SanitizeWatchedDevices();
-        DeduplicateDelaySlots();
+        SanitizeDelaySlots();
     }
 
     /// <summary>
@@ -185,22 +192,45 @@ public class SessionConfig
     }
 
     /// <summary>
-    /// Removes delay slots that repeat a slot number, keeping the first. The
-    /// controller keys slots by number, so a duplicate would be applied
-    /// ambiguously and then re-saved.
+    /// Repairs the delay-slot list so rebuilding the slots can never throw:
+    /// drops slots whose number is outside the console's 1-8 range (the
+    /// controller's <c>ConfigureSlot</c> rejects them), resets enum values that do
+    /// not exist (a hand-edited number deserializes into an undefined enum), clamps
+    /// a manual time into the 1-3000 ms range every M32 delay supports
+    /// (<see cref="DelaySlotConfig.Manual"/> throws on a non-positive time), and
+    /// removes slots that repeat a number, keeping the first (the controller keys
+    /// slots by number, so a duplicate would be applied ambiguously).
     /// </summary>
-    private void DeduplicateDelaySlots()
+    private void SanitizeDelaySlots()
     {
         HashSet<int> seen = new HashSet<int>();
-        List<DelaySlotDescriptor> unique = new List<DelaySlotDescriptor>();
+        List<DelaySlotDescriptor> valid = new List<DelaySlotDescriptor>();
         foreach (DelaySlotDescriptor s in DelaySlots)
         {
+            if (s.Slot < 1 || s.Slot > 8)
+            {
+                continue;
+            }
+
+            if (!Enum.IsDefined(s.EffectType))
+            {
+                s.EffectType = DelayEffectType.StereoDelay;
+            }
+            if (!Enum.IsDefined(s.Beat))
+            {
+                s.Beat = BeatType.Quarter;
+            }
+            if (!s.IsAutomatic)
+            {
+                s.ManualMs = DelayEffects.ClampTimeMs(s.ManualMs);
+            }
+
             if (seen.Add(s.Slot))
             {
-                unique.Add(s);
+                valid.Add(s);
             }
         }
-        DelaySlots = unique;
+        DelaySlots = valid;
     }
 
     /// <summary>
