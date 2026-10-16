@@ -155,15 +155,19 @@ public class OscClient
 
     public void Disconnect()
     {
+        UdpClient? closing;
         lock (ControlLock)
         {
             isRunning = false;
             keepAliveRunning = false;
             stop.Set();
-            udpClient?.Dispose();
+            closing = udpClient;
             udpClient = null;
             InvalidateSession();
         }
+        // Socket teardown can wait for an in-flight receive on Unix. The receive
+        // callback must be able to leave ControlLock while that teardown completes.
+        closing?.Dispose();
         if (receiveThread != Thread.CurrentThread) receiveThread?.Join(1000);
         if (keepAliveThread != Thread.CurrentThread) keepAliveThread?.Join(1000);
     }

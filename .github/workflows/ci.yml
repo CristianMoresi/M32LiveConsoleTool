@@ -51,6 +51,17 @@ jobs:
       - name: Test
         run: dotnet test "$SOLUTION" -c Release --no-build --logger trx --logger "console;verbosity=normal" --collect:"XPlat Code Coverage" --blame-hang-timeout 60s --blame-hang-dump-type mini --results-directory TestResults
 
+      - name: Diagnose macOS test hangs
+        if: failure() && runner.os == 'macOS'
+        continue-on-error: true
+        timeout-minutes: 2
+        run: |
+          dump=$(find TestResults -name '*hangdump.dmp' -print -quit)
+          if [ -n "$dump" ]; then
+            dotnet tool install dotnet-dump --tool-path "$RUNNER_TEMP/diagnostics" --allow-roll-forward
+            "$RUNNER_TEMP/diagnostics/dotnet-dump" analyze "$dump" -c "clrstack -all" -c "syncblk" -c "exit" > TestResults/hang-stack.txt
+          fi
+
       - name: Keep test results
         if: always()
         uses: actions/upload-artifact@v4

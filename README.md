@@ -6,17 +6,17 @@
 [![Release](https://github.com/CristianMoresi/M32LiveConsoleTool/actions/workflows/release.yml/badge.svg)](https://github.com/CristianMoresi/M32LiveConsoleTool/actions/workflows/release.yml)
 
 M32 Live Console Tool is a **mixing-automation** tool for the **Midas M32 /
-Behringer X32**. It is not a remote control or a backup utility — it runs three
+Behringer X32**. It is not a remote control or a backup utility. It runs three
 automations on the live mix:
 
-- **Auto-leveling** — keeps every channel and bus at a target level you set.
-- **Auto anti-clipping** — when a channel clips, it automatically pulls the gain down.
-- **Auto delays** — keeps the effect delays automatically synced to the tempo.
+- **Auto-leveling**: keeps every channel and bus at a target level you set.
+- **Auto anti-clipping**: when a channel clips, it automatically pulls the gain down.
+- **Auto delays**: keeps the effect delays automatically synced to the tempo.
 
 It talks to the console over OSC/UDP and runs against the real hardware or a
 built-in simulator.
 
-> **Note** — M32 and X32 are trademarks of Music Tribe. This is an independent,
+> **Note**: M32 and X32 are trademarks of Music Tribe. This is an independent,
 > unofficial tool and is not affiliated with or endorsed by Music Tribe.
 
 ## What it does
@@ -25,14 +25,14 @@ built-in simulator.
 
 A target-based automixer for the whole desk. You give each watched channel or bus a
 target level; the app compares its moving average against that target and moves the
-fader to hold it there — if the level drifts above the target it lowers the fader, if
+fader to hold it there. If the level drifts above the target it lowers the fader, if
 it drifts below it raises it. The correction speed is configurable, with separate up
 and down rates, and the moves are slew-rate-limited so they are gradual rather than
 sudden. Each watched channel and bus can opt into leveling independently and has its own maximum fader level.
 
 It does nothing while a channel is muted or below a silence gate, ignores large drops
 (an intentional cut, not drift), and stands down as soon as the engineer moves that
-fader, resuming only once the fader has settled — and, if the move happened during a
+fader, resuming only once the fader has settled and, if the move happened during a
 pause, only once there is real signal again, so it never mistakes silence for the new
 target level.
 
@@ -40,8 +40,8 @@ target level.
 
 An anti-clip safety net. It watches each channel's post-trim level and, once it
 confirms the channel is clipping (over the threshold for a few consecutive samples),
-it reduces the gain at the source feeding that channel — the local head amp or the
-AES50 stage box — so the channel stops clipping. The reduction is larger the further
+it reduces the gain at the source feeding that channel (the local head amp or the
+AES50 stage box), so the channel stops clipping. The reduction is larger the further
 the peak went over the threshold, and is applied on the console's own gain grid
 (0.5 dB head amp steps, 0.25 dB trim steps). It only attenuates; it never raises the
 gain back on its own. It waits for confirmed routing, gain and mute state, follows
@@ -51,14 +51,14 @@ channels fed by the same physical preamp. A configurable accumulated-reduction l
 The reduction counter starts again when the session is resynchronized or the routing,
 connection or device configuration is reset; it is not a lifetime attenuation budget.
 If the gain is already at its physical minimum and the channel
-still clips, it raises a single clear warning — manual action required — instead of
+still clips, it raises a single clear warning, "manual action required", instead of
 logging reductions that no longer reduce anything.
 
 ### Auto delays (tempo-synced)
 
 It detects the tempo (from a click track, a percussive channel, or manual tap tempo)
-and sets the console's delay slots to a chosen rhythmic figure — a dotted eighth, for
-example — recomputing the time whenever the tempo changes. It first asks the console
+and sets the console's delay slots to a chosen rhythmic figure (a dotted eighth, for
+example), recomputing the time whenever the tempo changes. It first asks the console
 which effect each FX slot holds, so it writes the time to that effect's correct
 parameter. Manual slots keep their configured fixed time. Unknown, unsupported or
 stale effect identities suspend writes. Automatic times require tempo evidence from
@@ -123,7 +123,7 @@ bounded background queue so file I/O does not hold the control or dashboard lock
 
 Grab a ready-to-run executable for your platform from the
 [latest release](https://github.com/CristianMoresi/M32LiveConsoleTool/releases/latest)
-— a single file with the .NET runtime embedded, so there is nothing to install and
+with a single file with the .NET runtime embedded, so there is nothing to install and
 no dependencies.
 
 | Platform | File |
@@ -134,18 +134,18 @@ no dependencies.
 | macOS · Intel | `…-osx-x64.tar.gz` |
 
 Unzip it (Windows) or extract it with `tar -xzf` (Linux/macOS) and run
-`M32LiveConsoleTool` from a terminal — it is a console application, not a windowed
+`M32LiveConsoleTool` from a terminal. It is a console application, not a windowed
 one. The binaries are not code-signed, so the first launch needs one extra step:
 
-- **Windows** — SmartScreen may ask you to confirm via **More info → Run anyway**.
-- **macOS** — clear Gatekeeper's quarantine flag with
+- **Windows**: SmartScreen may ask you to confirm via **More info → Run anyway**.
+- **macOS**: clear Gatekeeper's quarantine flag with
   `xattr -d com.apple.quarantine M32LiveConsoleTool`.
 
 Each release also ships a `SHA256SUMS.txt` you can check your download against.
 
 ## Requirements
 
-- To run a release binary: nothing — the .NET runtime is embedded in the
+- To run a release binary: nothing; the .NET runtime is embedded in the
   executable. Download, extract and run.
 - To build from source: the [.NET 10 SDK](https://dotnet.microsoft.com/).
 - For real hardware: an M32/X32 reachable on the local network, with OSC enabled
@@ -206,7 +206,7 @@ Configured delay slots:
 ```
 
 The menu legend at the bottom wraps to as many rows as the window width needs, so it
-is never truncated, and the whole screen — including the menu — re-flows cleanly when
+is never truncated, and the whole screen, including the menu, re-flows cleanly when
 the terminal is resized. If the window is shrunk below a usable size, a clear
 "terminal too small" notice is shown (with the minimum and current size) until it is
 enlarged again, instead of a broken layout.
@@ -226,7 +226,7 @@ The header shows `LIVE`, `SYNC`, `NO SIGNAL` or `RELEASED`; `?` in a row means s
 is still unknown, `S` means stale meters and `-` means leveling is excluded.
 Preferences → `[V]` shows traffic, rejected packets, failed sends and log drops.
 
-The BPM submenu includes a figure-times table — every rhythmic figure converted to
+The BPM submenu includes a figure-times table with every rhythmic figure converted to
 milliseconds at the current tempo, with values beyond the console's 3000 ms cap
 marked. The channel marked `*` is the one the BPM detector reads its tempo from.
 Every input flow can be cancelled with `Esc` and every notice is dismissed with a
@@ -241,10 +241,10 @@ Files live in the standard per-user application-data folder
 `~/Library/Application Support/M32LiveConsoleTool/` on macOS,
 `~/.config/M32LiveConsoleTool/` on Linux):
 
-- `last_session.json` — the last session (including recalibrated targets),
+- `last_session.json`: the last session (including recalibrated targets),
   restored on launch.
-- `presets/` — named configurations.
-- `logs/` — one dated event-log file per run (e.g. `2026-05-29_21-45-03.log`);
+- `presets/`: named configurations.
+- `logs/`: one dated event-log file per run (e.g. `2026-05-29_21-45-03.log`);
   the most recent 50 are kept and older ones are pruned automatically.
 
 Presets show a summary of changes before application. They apply their exact module
