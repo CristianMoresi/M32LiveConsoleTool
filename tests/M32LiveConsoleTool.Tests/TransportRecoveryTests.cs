@@ -146,7 +146,8 @@ public class TransportRecoveryTests
         var client = new OscClient("127.0.0.1", simulator.LocalPort, 0);
         var meter = new MeterReader(client, new(), 1000);
         var delay = new DelayController(client, logger);
-        var bpm = new BpmDetector(meter, delay, logger, new MixerChannel("Unused", 1, -18, 0), BpmDetectionMode.ManualTap, -20);
+        var bpm = new BpmDetector(meter, delay, logger, new MixerChannel("Unused", 1, -18, 0),
+            BpmDetectionMode.ManualTap, -20, bpmChangeHysteresis: 0);
         try
         {
             Assert.True(client.Connect()); long generation = client.Generation;
@@ -155,7 +156,12 @@ public class TransportRecoveryTests
             for (int i = 0; i < 6; i++) { bpm.TapTempo(); Thread.Sleep(500); }
             Assert.Equal(generation, client.Generation);
             Assert.True(bpm.IsTempoFresh);
-            Assert.InRange(FaderMath.Denormalize(simulator.ReadParameter("/fx/1/par/02"), 1, 3000), 450, 550);
+            // Scheduling jitter changes real tap spacing on a busy runner. The
+            // transport must carry the measured tempo, not an assumed Sleep duration.
+            bpm.TryUpdateBpm();
+            double expectedMs = 60000 / bpm.CurrentBpm;
+            Assert.True(Until(() => Math.Abs(FaderMath.Denormalize(
+                simulator.ReadParameter("/fx/1/par/02"), 1, 3000) - expectedMs) < .1));
         }
         finally { bpm.Stop(); delay.Stop(); meter.StopReading(); client.Disconnect(); simulator.Stop(); }
     }
