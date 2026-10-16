@@ -1,9 +1,9 @@
 {
-  "durationSeconds": 12.0490022,
-  "cpuMs": 734.375,
-  "oneCoreCpuPercent": 6.094903028567792,
-  "allocatedBytes": 13081584,
-  "receivedMessages": 8394,
+  "durationSeconds": 12.0018048,
+  "cpuMs": 687.5,
+  "oneCoreCpuPercent": 5.728305129575178,
+  "allocatedBytes": 13057472,
+  "receivedMessages": 8361,
   "controlWrites": 2,
   "gcCollections": [
     0,
@@ -18,9 +18,9 @@
     "p95": 15,
     "p99": 15
   },
-  "panicMs": 0.2299,
+  "panicMs": 0.297,
   "panicPassed": true,
-  "average48000CallsMs": 35.4052,
+  "average48000CallsMs": 33.0796,
   "average48000CallsAllocatedBytes": 168,
   "SendFailureCount": 0,
   "RejectedCount": 0,

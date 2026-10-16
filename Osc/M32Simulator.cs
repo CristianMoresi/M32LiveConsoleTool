@@ -181,6 +181,7 @@ public class M32Simulator
         try
         {
             listener = new UdpClient(listenPort);
+            listener.Client.ReceiveTimeout = 250;
         }
         catch (SocketException)
         {

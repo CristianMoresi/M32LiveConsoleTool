@@ -81,6 +81,9 @@ public class OscClient
             try
             {
                 var socket = new UdpClient(new IPEndPoint(IPAddress.Any, receivePort));
+                // Bound the native receive: closing an idle blocking UDP socket on
+                // macOS can otherwise wait forever for its outstanding read.
+                socket.Client.ReceiveTimeout = 250;
                 udpClient = socket;
                 stop.Reset();
                 isRunning = true;
@@ -189,7 +192,11 @@ public class OscClient
                 }
             }
             catch (ObjectDisposedException) { break; }
-            catch (SocketException) { if (!isRunning) break; Interlocked.Increment(ref rejected); }
+            catch (SocketException ex)
+            {
+                if (!isRunning) break;
+                if (ex.SocketErrorCode != SocketError.TimedOut) Interlocked.Increment(ref rejected);
+            }
             catch (Exception) { Interlocked.Increment(ref rejected); }
         }
     }

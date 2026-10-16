@@ -122,8 +122,8 @@ bounded background queue so file I/O does not hold the control or dashboard lock
 ## Download
 
 Grab a ready-to-run executable for your platform from the
-[latest release](https://github.com/CristianMoresi/M32LiveConsoleTool/releases/latest)
-with a single file with the .NET runtime embedded, so there is nothing to install and
+[latest release](https://github.com/CristianMoresi/M32LiveConsoleTool/releases/latest).
+It is a single file with the .NET runtime embedded, so there is nothing to install and
 no dependencies.
 
 | Platform | File |

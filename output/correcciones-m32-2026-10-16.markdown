@@ -7,7 +7,7 @@
 
 ## Resultado
 
-Se han implementado correcciones para los 24 hallazgos del informe y las mejoras de control por dispositivo, diagnóstico, persistencia y CI. La suite pasa **158 de 158 pruebas**, frente a las 107 pruebas originales; se han añadido 51 casos y reparado pruebas que antes podían pasar sin verificar el comportamiento pretendido.
+Se han implementado correcciones para los 24 hallazgos del informe y las mejoras de control por dispositivo, diagnóstico, persistencia y CI. La suite pasa **159 de 159 pruebas**, frente a las 107 pruebas originales; se han añadido 52 casos y reparado pruebas que antes podían pasar sin verificar el comportamiento pretendido.
 
 Los controladores requieren estado observado y reciente. Las escrituras pasan por una puerta común, el pánico la cierra antes de detener los módulos, los recursos de ganancia se comparten por previo físico y los cambios de sesión invalidan las cachés. El código separa la observación de la mesa de los comandos pendientes de confirmación.
 
@@ -71,16 +71,16 @@ Las referencias de pruebas siguientes están en [AuditRegressionTests.cs](../tes
 
 ### Suite, cobertura y compilación
 
-Entorno local: Windows x64, SDK 10.0.302, runtime 10.0.10. Compilación Release y publicación autocontenida correctas, sin advertencias de compilador ni errores. Suite final: **158 aprobadas, 0 fallidas, 0 omitidas**.
+Entorno local: Windows x64, SDK 10.0.302, runtime 10.0.10. Compilación Release y publicación autocontenida correctas, sin advertencias de compilador ni errores. Suite final: **159 aprobadas, 0 fallidas, 0 omitidas**.
 
 | Medida | Auditoría inicial | Tras las correcciones |
 | --- | ---: | ---: |
-| Pruebas existentes/actuales | 107 | 158 |
-| Pruebas aprobadas en la ejecución conservada | 105 | 158 |
-| Cobertura de líneas | 32,64 % | 47,92 % |
-| Cobertura de ramas | 28,70 % | 46,11 % |
-| Líneas ejecutadas / instrumentadas | 1.239 / 3.795 | 1.982 / 4.136 |
-| Ramas ejecutadas / instrumentadas | 521 / 1.815 | 1.111 / 2.409 |
+| Pruebas existentes/actuales | 107 | 159 |
+| Pruebas aprobadas en la ejecución conservada | 105 | 159 |
+| Cobertura de líneas | 32,64 % | 47,99 % |
+| Cobertura de ramas | 28,70 % | 46,16 % |
+| Líneas ejecutadas / instrumentadas | 1.239 / 3.795 | 1.988 / 4.142 |
+| Ramas ejecutadas / instrumentadas | 521 / 1.815 | 1.113 / 2.411 |
 
 La cobertura sigue siendo parcial, especialmente en menús interactivos y rutas de fallo del sistema operativo. La subida de porcentaje no sustituye las regresiones concretas ni demuestra ausencia de otros errores. El código instrumentado también ha cambiado, por lo que los denominadores son distintos.
 
@@ -112,7 +112,7 @@ La copia por consulta desaparece: aproximadamente **99,98 % menos bytes asignado
 
 El EXE autocontenido para Windows se publicó y ejecutó durante 12 segundos sobre 32 canales y 16 buses. Resultado: 48 dispositivos y 32 ganancias sincronizados, 0 comprobaciones degradadas, 0 fallos de envío, 0 descartes de log y pánico correcto. Durante los 150 ms posteriores a inhibir las escrituras no se registraron nuevos comandos de control.
 
-Medición: 12,049 s; 734,375 ms de CPU (6,09 % de un núcleo); 13.081.584 bytes asignados; 8.394 mensajes recibidos; 0 colecciones GC durante el intervalo; 0,2299 ms para cerrar la puerta de escritura. Edad de meters muestreada: p50/p95/p99 de 15/15/15 ms. Evidencia completa: [portable-self-test-2026-10-16.json](portable-self-test-2026-10-16.json).
+Medición: 12,002 s; 687,5 ms de CPU (5,73 % de un núcleo); 13.057.472 bytes asignados; 8.361 mensajes recibidos; 0 colecciones GC durante el intervalo; 0,297 ms para cerrar la puerta de escritura. Edad de meters muestreada: p50/p95/p99 de 15/15/15 ms. Evidencia completa: [portable-self-test-2026-10-16.json](portable-self-test-2026-10-16.json).
 
 El perfil inicial de 12 s medía aproximadamente 3 % de un núcleo y 23,57 MB asignados, pero usaba otro modelo de simulación y otro ritmo de sincronización. Por eso **no se afirma una mejora global de CPU** comparando ambos perfiles. La edad de los meters mide antigüedad de la última muestra en el proceso, no latencia de audio ni tiempo extremo a extremo de respuesta ante clipping.
 
@@ -124,7 +124,15 @@ CPU acumulada: 36.625 ms, equivalente al **2,03 % de un núcleo**. Asignaciones 
 
 La carga fue estable, con entrada fija a −15 dB y excursiones de clipping desactivadas. Los tres módulos estaban activos, pero solo se emitieron 2 comandos de control: comprueba continuidad de recepción, sincronización y workers, no la peor carga de correcciones posibles. Los casos de clipping, pérdidas y recuperación se ejercitan en pruebas separadas. Evidencia: [soak-30min-2026-10-16.json](soak-30min-2026-10-16.json).
 
-La sesión larga usa un build aislado de las correcciones principales, iniciado antes de los últimos ajustes de caducidad de routing, tap sin canales y techo cercano de fader. Esos ajustes están cubiertos por la suite final y por la prueba del portable final. Esta distinción evita atribuir a la sesión larga una revisión que no ejecutó.
+La sesión larga usa un build aislado de las correcciones principales, iniciado antes de los últimos ajustes de caducidad de routing, tap sin canales, techo cercano de fader y cierre UDP acotado. Esos ajustes están cubiertos por la suite final y por la prueba del portable final. Esta distinción evita atribuir a la sesión larga una revisión que no ejecutó.
+
+## Corrección adicional detectada en CI de macOS
+
+La nueva matriz detectó un bloqueo de cierre que la ejecución local en Windows no había mostrado. El volcado de la [ejecución de diagnóstico](https://github.com/CristianMoresi/M32LiveConsoleTool/actions/runs/38891748379) sitúa dos pruebas en `OscClient.Disconnect → UdpClient.Dispose → SafeSocketHandle.CloseAsIs`, mientras los receptores siguen en `ReceiveMessage`. El movimiento del cierre fuera de la puerta de control, por sí solo, no bastó.
+
+La solución mantiene ese cierre fuera de la puerta y añade un tiempo máximo de recepción nativa de 250 ms al cliente y al simulador. Los vencimientos normales no cuentan como paquetes rechazados. `Idle_udp_receivers_can_stop_without_incoming_packets` comprueba que ambos receptores se cierren sin depender de un datagrama nuevo. Las tres pruebas originales de BPM pasan a un reloj controlado: ya no confunden retrasos del planificador del runner con errores del cálculo de tempo.
+
+CI dispone además de un máximo de 10 minutos por job, diagnóstico de inactividad de 60 s por prueba y análisis automático de las pilas de macOS si se produce otro bloqueo. Las ejecuciones fallidas siguen fallando; las herramientas de diagnóstico no convierten un error en éxito. El README se ha revisado para eliminar todos los em dashes solicitados.
 
 ## Reproducción
 

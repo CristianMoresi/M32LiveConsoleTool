@@ -1,8 +1,8 @@
 {
   "tests": {
-    "total": "158",
-    "executed": "158",
-    "passed": "158",
+    "total": "159",
+    "executed": "159",
+    "passed": "159",
     "failed": "0",
     "error": "0",
     "timeout": "0",
@@ -18,12 +18,12 @@
     "pending": "0"
   },
   "coverage": {
-    "line-rate": "0.4792",
-    "branch-rate": "0.4611",
-    "lines-covered": "1982",
-    "lines-valid": "4136",
-    "branches-covered": "1111",
-    "branches-valid": "2409"
+    "line-rate": "0.4799",
+    "branch-rate": "0.46159999999999995",
+    "lines-covered": "1988",
+    "lines-valid": "4142",
+    "branches-covered": "1113",
+    "branches-valid": "2411"
   },
   "baselineCoverage": {
     "line-rate": "0.3264",
@@ -79,7 +79,7 @@
     {
       "name": "M32LiveConsoleTool.Osc.M32Simulator",
       "filename": "Osc\\M32Simulator.cs",
-      "line-rate": "0.8169",
+      "line-rate": "0.8175",
       "branch-rate": "0.7225"
     },
     {
@@ -91,8 +91,8 @@
     {
       "name": "M32LiveConsoleTool.Osc.OscClient",
       "filename": "Osc\\OscClient.cs",
-      "line-rate": "0.8818",
-      "branch-rate": "0.7812"
+      "line-rate": "0.8869",
+      "branch-rate": "0.7878000000000001"
     },
     {
       "name": "M32LiveConsoleTool.Osc.OscMessage",

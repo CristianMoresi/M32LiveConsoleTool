@@ -11,6 +11,19 @@ namespace M32LiveConsoleTool.Tests;
 
 public class TransportRecoveryTests
 {
+    [Fact]
+    public async Task Idle_udp_receivers_can_stop_without_incoming_packets()
+    {
+        var simulator = new M32Simulator(0, new ShowLogger());
+        simulator.Start(); Assert.True(simulator.IsRunning);
+        var client = new OscClient("127.0.0.1", simulator.LocalPort, 0);
+        Assert.True(client.Connect());
+        await Task.Delay(350); // both receive loops are waiting; no peer sends a packet
+        Assert.Equal(0, client.RejectedCount); // receive timeouts are normal maintenance
+        var shutdown = Task.Run(() => { client.Disconnect(); simulator.Stop(); });
+        await shutdown.WaitAsync(TimeSpan.FromSeconds(3));
+    }
+
     private static bool Until(Func<bool> predicate, int timeoutMs = 6000)
     {
         var watch = Stopwatch.StartNew();
