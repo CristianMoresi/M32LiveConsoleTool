@@ -40,7 +40,7 @@ public static class FaderMath
     /// <returns>Value in dB, clamped to <see cref="METER_FLOOR_DB"/> for very low inputs.</returns>
     public static double MeterToDb(float linear)
     {
-        if (linear <= METER_FLOOR_LINEAR)
+        if (!float.IsFinite(linear) || linear <= METER_FLOOR_LINEAR)
         {
             return METER_FLOOR_DB;
         }
@@ -139,7 +139,7 @@ public static class FaderMath
     /// </remarks>
     public static double DelayMsForBeat(double bpm, BeatType beat)
     {
-        if (bpm <= 0)
+        if (!double.IsFinite(bpm) || bpm <= 0)
         {
             return 0.0;
         }
@@ -188,7 +188,7 @@ public static class FaderMath
     /// </summary>
     public static float Normalize(double value, double min, double max)
     {
-        if (max <= min)
+        if (!double.IsFinite(value) || !double.IsFinite(min) || !double.IsFinite(max) || max <= min)
         {
             return 0f;
         }

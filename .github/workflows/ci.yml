@@ -4,6 +4,7 @@ name: CI
 # nothing reaches main unverified. Pushes to main are covered by the Release
 # workflow, which runs the same build and test steps before publishing.
 on:
+  workflow_call:
   pull_request:
   push:
     branches-ignore: [ main ]
@@ -23,8 +24,15 @@ env:
 
 jobs:
   build-test:
-    name: Build and test
-    runs-on: ubuntu-latest
+    name: Build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -40,4 +48,22 @@ jobs:
         run: dotnet build "$SOLUTION" -c Release --no-restore
 
       - name: Test
-        run: dotnet test "$SOLUTION" -c Release --no-build --verbosity normal
+        run: dotnet test "$SOLUTION" -c Release --no-build --logger trx --collect:"XPlat Code Coverage" --results-directory TestResults
+
+      - name: Keep test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tests-${{ matrix.os }}
+          path: TestResults/
+
+      - name: Publish portable executable
+        run: |
+          rid=$(dotnet msbuild M32LiveConsoleTool.csproj -nologo -getProperty:NETCoreSdkRuntimeIdentifier)
+          dotnet publish M32LiveConsoleTool.csproj -c Release -r "$rid" --self-contained true -p:PublishSingleFile=true -o publish/smoke
+
+      - name: Smoke test portable executable
+        run: |
+          executable=publish/smoke/M32LiveConsoleTool
+          if [ "$RUNNER_OS" = "Windows" ]; then executable="$executable.exe"; fi
+          "$executable" --self-test

@@ -1,0 +1,26 @@
+transport-control: plain UdpClient queued after each send: 0,1,2,3,4,5
+A01-small-step: OBSERVED | default 0.5 dB/s, 100 ms, fader -20 dB: sent=0, state=ManualOverride, lastSent=0,37625003, current=0,375
+A02-unresolved-preamp: OBSERVED | resolved=False, cachedGainBefore=12 dB, outgoing=/ch/01/preamp/trim 0,75, cachedGainAfter=9
+A03-digital-trim: OBSERVED | digital source resolved=True; trim queries=0; trim feedback handled=False; feedback -18 dB leaves cache at 0 dB
+A04-shared-preamp: OBSERVED | same HA0: channel1=-12 dB, channel2=0 dB
+A05-stale-meters: OBSERVED | sample 2200 ms old; receiving=False; outgoing corrections=1
+A06-invalid-meter-health: OBSERVED | unknown alias plus truncated blob marks receiving=True
+A07-nan-contamination: OBSERVED | NaN plus valid 0.1 amplitude => average=NaN
+A08-delay-before-detection: OBSERVED | detected=0; outgoing=/fx/1/par/02
+A09-unknown-fx-retained: OBSERVED | new unknown type 999 keeps Stereo Delay; writes=1
+A10-preset-window: OBSERVED | config window=900, active window=2500
+A10-preset-manual-delay: OBSERVED | loaded 800 ms manual slot: outgoing writes=0
+A10-preset-enabled: OBSERVED | loaded OFF, runtime=True, config=False
+A11-null-config: OBSERVED | valid JSON WatchedDevices:null => NullReferenceException
+A12-history-window: OBSERVED | configured window 10000 ms; 7-second sample removed; average=-40,0 dB (two-sample expected about -23.0 dB)
+A13-substep-gain: OBSERVED | valid reduction 0.1 dB, HA step 0.5 dB: gain after action=-0; writes=1
+A14-delayed-echo: OBSERVED | older echo after two commands enters ManualOverride
+A15-bpm-zero-hysteresis: OBSERVED | two taps, ten recalculations, stable bpm=120, outgoing identical delay writes=10
+A16-foreign-endpoint: OBSERVED | packet from unconfigured source port updates fader=0,9
+A17-meter-peak-skipped: OBSERVED | received clipped then quiet sample before worker poll; confirmation=1; gain=0, no action
+A18-ip-change-keeps-state: OBSERVED | after endpoint change: faderInitialized=True, history=1, effectsCached=1
+A19-simulator-gain: OBSERVED | HA reduced 12 dB: post-trim change=-12,01 dB, post-fader change=-0,01 dB
+A20-mute-never-retried: OBSERVED | lost initial mute reply, fader and headamp known: default muted=False; retry queries=0
+A21-ipv6: OBSERVED | IPv6 validator accepts ::1; Send result: ArgumentException: None of the discovered or specified addresses match the socket address family. (Parameter 'hostname')
+A22-routing-cache: OBSERVED | source-change feedback leaves resolved HA index=0; no refresh query
+perf-moving-average: 48000 calls, 41088040 bytes, 207,39 ms

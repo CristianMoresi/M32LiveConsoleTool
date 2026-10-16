@@ -1,0 +1,28 @@
+{
+  "durationSeconds": 12.0490022,
+  "cpuMs": 734.375,
+  "oneCoreCpuPercent": 6.094903028567792,
+  "allocatedBytes": 13081584,
+  "receivedMessages": 8394,
+  "controlWrites": 2,
+  "gcCollections": [
+    0,
+    0,
+    0
+  ],
+  "devicesReady": 48,
+  "gainsReady": 32,
+  "degradedChecks": 0,
+  "observedMeterAgeMs": {
+    "p50": 15,
+    "p95": 15,
+    "p99": 15
+  },
+  "panicMs": 0.2299,
+  "panicPassed": true,
+  "average48000CallsMs": 35.4052,
+  "average48000CallsAllocatedBytes": 168,
+  "SendFailureCount": 0,
+  "RejectedCount": 0,
+  "DroppedEvents": 0
+}

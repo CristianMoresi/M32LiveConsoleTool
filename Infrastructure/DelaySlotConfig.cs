@@ -43,6 +43,7 @@ public class DelaySlotConfig
 
     private DelaySlotConfig(DelayEffectType effectType, bool isAutomatic, BeatType beat, double manualMs)
     {
+        if (!Enum.IsDefined(effectType) || !Enum.IsDefined(beat)) throw new ArgumentOutOfRangeException(nameof(effectType));
         this.effectType = effectType;
         this.isAutomatic = isAutomatic;
         this.beat = beat;
@@ -72,7 +73,7 @@ public class DelaySlotConfig
     /// <param name="manualMs">Delay time in milliseconds. Must be positive.</param>
     public static DelaySlotConfig Manual(DelayEffectType effectType, double manualMs)
     {
-        if (manualMs <= 0)
+        if (!double.IsFinite(manualMs) || manualMs <= 0)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(manualMs),
@@ -134,7 +135,7 @@ public class DelaySlotConfig
             return manualMs;
         }
 
-        if (bpm <= 0)
+        if (!double.IsFinite(bpm) || bpm <= 0)
         {
             return 0.0;
         }

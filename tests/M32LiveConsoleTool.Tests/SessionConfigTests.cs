@@ -15,7 +15,6 @@ public class SessionConfigTests
     [InlineData("192.168.1.5")]
     [InlineData("127.0.0.1")]
     [InlineData("10.0.0.42")]
-    [InlineData("::1")]
     public void Accepts_valid_ip_addresses(string ip)
     {
         Assert.True(SessionConfig.IsValidMixerIp(ip));
@@ -27,6 +26,7 @@ public class SessionConfigTests
     [InlineData(null)]
     [InlineData("not an ip")]
     [InlineData("999.999.999.999")]
+    [InlineData("::1")]
     [InlineData("mixer.local")]
     public void Rejects_invalid_or_non_literal_addresses(string? ip)
     {

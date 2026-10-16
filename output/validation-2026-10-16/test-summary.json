@@ -1,0 +1,242 @@
+{
+  "tests": {
+    "total": "158",
+    "executed": "158",
+    "passed": "158",
+    "failed": "0",
+    "error": "0",
+    "timeout": "0",
+    "aborted": "0",
+    "inconclusive": "0",
+    "passedButRunAborted": "0",
+    "notRunnable": "0",
+    "notExecuted": "0",
+    "disconnected": "0",
+    "warning": "0",
+    "completed": "0",
+    "inProgress": "0",
+    "pending": "0"
+  },
+  "coverage": {
+    "line-rate": "0.4792",
+    "branch-rate": "0.4611",
+    "lines-covered": "1982",
+    "lines-valid": "4136",
+    "branches-covered": "1111",
+    "branches-valid": "2409"
+  },
+  "baselineCoverage": {
+    "line-rate": "0.3264",
+    "branch-rate": "0.287",
+    "lines-covered": "1239",
+    "lines-valid": "3795",
+    "branches-covered": "521",
+    "branches-valid": "1815"
+  },
+  "classes": [
+    {
+      "name": "M32LiveConsoleTool.Program",
+      "filename": "Program.cs",
+      "line-rate": "0",
+      "branch-rate": "0"
+    },
+    {
+      "name": "M32LiveConsoleTool.Ui.AppOrchestrator",
+      "filename": "Ui\\AppOrchestrator.cs",
+      "line-rate": "0.41869999999999996",
+      "branch-rate": "0.2065"
+    },
+    {
+      "name": "M32LiveConsoleTool.Ui.ConsoleDashboard",
+      "filename": "Ui\\ConsoleDashboard.cs",
+      "line-rate": "0",
+      "branch-rate": "0"
+    },
+    {
+      "name": "M32LiveConsoleTool.Ui.ConsoleMenu",
+      "filename": "Ui\\ConsoleMenu.cs",
+      "line-rate": "0",
+      "branch-rate": "0"
+    },
+    {
+      "name": "M32LiveConsoleTool.Ui.FirstRunWizard",
+      "filename": "Ui\\FirstRunWizard.cs",
+      "line-rate": "0",
+      "branch-rate": "0"
+    },
+    {
+      "name": "M32LiveConsoleTool.Ui.OperatorInput",
+      "filename": "Ui\\OperatorInput.cs",
+      "line-rate": "0.8",
+      "branch-rate": "0.5"
+    },
+    {
+      "name": "M32LiveConsoleTool.Osc.M32Buckets",
+      "filename": "Osc\\M32MeterMap.cs",
+      "line-rate": "1",
+      "branch-rate": "1"
+    },
+    {
+      "name": "M32LiveConsoleTool.Osc.M32Simulator",
+      "filename": "Osc\\M32Simulator.cs",
+      "line-rate": "0.8169",
+      "branch-rate": "0.7225"
+    },
+    {
+      "name": "M32LiveConsoleTool.Osc.M32Simulator/Subscription",
+      "filename": "Osc\\M32Simulator.cs",
+      "line-rate": "1",
+      "branch-rate": "1"
+    },
+    {
+      "name": "M32LiveConsoleTool.Osc.OscClient",
+      "filename": "Osc\\OscClient.cs",
+      "line-rate": "0.8818",
+      "branch-rate": "0.7812"
+    },
+    {
+      "name": "M32LiveConsoleTool.Osc.OscMessage",
+      "filename": "Osc\\OscMessage.cs",
+      "line-rate": "0.9031999999999999",
+      "branch-rate": "0.8"
+    },
+    {
+      "name": "M32LiveConsoleTool.Modules.DelaySlotConfig",
+      "filename": "Infrastructure\\DelaySlotConfig.cs",
+      "line-rate": "0.875",
+      "branch-rate": "0.75"
+    },
+    {
+      "name": "M32LiveConsoleTool.Modules.AntiClipper",
+      "filename": "Modules\\AntiClipper.cs",
+      "line-rate": "0.7076",
+      "branch-rate": "0.7662"
+    },
+    {
+      "name": "M32LiveConsoleTool.Modules.AutoLeveler",
+      "filename": "Modules\\AutoLeveler.cs",
+      "line-rate": "0.7195999999999999",
+      "branch-rate": "0.8240000000000001"
+    },
+    {
+      "name": "M32LiveConsoleTool.Modules.BpmDetector",
+      "filename": "Modules\\BpmDetector.cs",
+      "line-rate": "0.7589",
+      "branch-rate": "0.6229"
+    },
+    {
+      "name": "M32LiveConsoleTool.Modules.DelayController",
+      "filename": "Modules\\DelayController.cs",
+      "line-rate": "0.9666",
+      "branch-rate": "0.8726999999999999"
+    },
+    {
+      "name": "M32LiveConsoleTool.Modules.MeterReader",
+      "filename": "Modules\\MeterReader.cs",
+      "line-rate": "0.6576000000000001",
+      "branch-rate": "0.6704000000000001"
+    },
+    {
+      "name": "M32LiveConsoleTool.Infrastructure.AppPaths",
+      "filename": "Infrastructure\\AppPaths.cs",
+      "line-rate": "0.5471",
+      "branch-rate": "0.6111"
+    },
+    {
+      "name": "M32LiveConsoleTool.Infrastructure.DelayEffects",
+      "filename": "Infrastructure\\DelayEffectType.cs",
+      "line-rate": "1",
+      "branch-rate": "1"
+    },
+    {
+      "name": "M32LiveConsoleTool.Infrastructure.FaderMath",
+      "filename": "Infrastructure\\FaderMath.cs",
+      "line-rate": "0.75",
+      "branch-rate": "0.7241"
+    },
+    {
+      "name": "M32LiveConsoleTool.Infrastructure.DetectedEffect",
+      "filename": "Infrastructure\\FxEffectCatalog.cs",
+      "line-rate": "1",
+      "branch-rate": "1"
+    },
+    {
+      "name": "M32LiveConsoleTool.Infrastructure.FxEffectCatalog",
+      "filename": "Infrastructure\\FxEffectCatalog.cs",
+      "line-rate": "1",
+      "branch-rate": "0.8709"
+    },
+    {
+      "name": "M32LiveConsoleTool.Infrastructure.SessionConfig",
+      "filename": "Infrastructure\\SessionConfig.cs",
+      "line-rate": "1",
+      "branch-rate": "0.8332999999999999"
+    },
+    {
+      "name": "M32LiveConsoleTool.Infrastructure.DelaySlotDescriptor",
+      "filename": "Infrastructure\\SessionConfig.cs",
+      "line-rate": "1",
+      "branch-rate": "1"
+    },
+    {
+      "name": "M32LiveConsoleTool.Infrastructure.ShowLogger",
+      "filename": "Infrastructure\\ShowLogger.cs",
+      "line-rate": "0.7884",
+      "branch-rate": "0.8461"
+    },
+    {
+      "name": "M32LiveConsoleTool.Infrastructure.LogEntry",
+      "filename": "Infrastructure\\ShowLogger.cs",
+      "line-rate": "1",
+      "branch-rate": "1"
+    },
+    {
+      "name": "M32LiveConsoleTool.Infrastructure.SimulationSelfTest",
+      "filename": "Infrastructure\\SimulationSelfTest.cs",
+      "line-rate": "0",
+      "branch-rate": "0"
+    },
+    {
+      "name": "M32LiveConsoleTool.Infrastructure.SimulationSelfTest/<>c__DisplayClass0_1",
+      "filename": "Infrastructure\\SimulationSelfTest.cs",
+      "line-rate": "0",
+      "branch-rate": "0"
+    },
+    {
+      "name": "M32LiveConsoleTool.Domain.AudioDevice",
+      "filename": "Domain\\AudioDevice.cs",
+      "line-rate": "0.9516",
+      "branch-rate": "0.8111"
+    },
+    {
+      "name": "M32LiveConsoleTool.Domain.AudioDeviceDescriptor",
+      "filename": "Domain\\AudioDeviceDescriptor.cs",
+      "line-rate": "1",
+      "branch-rate": "1"
+    },
+    {
+      "name": "M32LiveConsoleTool.Domain.Bus",
+      "filename": "Domain\\Bus.cs",
+      "line-rate": "0.5",
+      "branch-rate": "1"
+    },
+    {
+      "name": "M32LiveConsoleTool.Domain.GainState",
+      "filename": "Domain\\GainState.cs",
+      "line-rate": "0.875",
+      "branch-rate": "0.8332999999999999"
+    },
+    {
+      "name": "M32LiveConsoleTool.Domain.MeterSample",
+      "filename": "Domain\\MeterSample.cs",
+      "line-rate": "0.8928",
+      "branch-rate": "1"
+    },
+    {
+      "name": "M32LiveConsoleTool.Domain.MixerChannel",
+      "filename": "Domain\\MixerChannel.cs",
+      "line-rate": "0.6451",
+      "branch-rate": "0.7142000000000001"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "parameters": "--vulnerable --include-transitive",
+  "sources": [
+    "https://api.nuget.org/v3/index.json",
+    "C:/Program Files (x86)/Microsoft SDKs/NuGetPackages/"
+  ],
+  "projects": [
+    {
+      "path": "E:/Code/Projects/CS-DAW/M32LiveConsoleTool/M32LiveConsoleTool.csproj"
+    },
+    {
+      "path": "E:/Code/Projects/CS-DAW/M32LiveConsoleTool/tests/M32LiveConsoleTool.Tests/M32LiveConsoleTool.Tests.csproj"
+    }
+  ]
+}

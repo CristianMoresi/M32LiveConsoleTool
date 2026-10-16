@@ -31,6 +31,8 @@ public class MeterSample
     // ─────────────────────────────────────────────────────────────────────
 
     private readonly DateTime timestamp;
+    private readonly TimeProvider clock;
+    public long MonotonicTimestamp { get; }
     private readonly float postTrimLinear;
     private readonly float gateGainReductionLinear;
     private readonly float compressorGainReductionLinear;
@@ -52,9 +54,11 @@ public class MeterSample
         float postTrimLinear,
         float gateGainReductionLinear,
         float compressorGainReductionLinear,
-        float postFaderLinear)
+        float postFaderLinear, TimeProvider? clock = null)
     {
-        this.timestamp = DateTime.UtcNow;
+        this.clock = clock ?? TimeProvider.System;
+        this.timestamp = this.clock.GetUtcNow().UtcDateTime;
+        MonotonicTimestamp = this.clock.GetTimestamp();
         this.postTrimLinear = postTrimLinear;
         this.gateGainReductionLinear = gateGainReductionLinear;
         this.compressorGainReductionLinear = compressorGainReductionLinear;
@@ -67,8 +71,8 @@ public class MeterSample
     /// post-fader (typically buses, from the <c>/meters/2</c> bundle).
     /// </summary>
     /// <param name="postFaderLinear">Post-fader level, linear, range [0, 1.0+].</param>
-    public MeterSample(float postFaderLinear)
-        : this(float.NaN, float.NaN, float.NaN, postFaderLinear)
+    public MeterSample(float postFaderLinear, TimeProvider? clock = null)
+        : this(float.NaN, float.NaN, float.NaN, postFaderLinear, clock)
     {
     }
 
@@ -163,6 +167,8 @@ public class MeterSample
     /// </remarks>
     public double AgeMs()
     {
-        return (DateTime.UtcNow - timestamp).TotalMilliseconds;
+        return clock.GetElapsedTime(MonotonicTimestamp).TotalMilliseconds;
     }
+
+    public double AgeMs(long now) => clock.GetElapsedTime(MonotonicTimestamp, now).TotalMilliseconds;
 }

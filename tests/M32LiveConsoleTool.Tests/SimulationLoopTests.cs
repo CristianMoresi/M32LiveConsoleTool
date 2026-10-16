@@ -18,11 +18,10 @@ public class SimulationLoopTests
     public void AutoLeveler_pulls_level_toward_target_against_the_simulator()
     {
         var logger = new ShowLogger(); // memory-only: Open() is never called
-        const int sendPort = 16523;
-        const int receivePort = 16524;
-
-        var simulator = new M32Simulator(sendPort, logger);
-        var client = new OscClient("127.0.0.1", sendPort, receivePort);
+        var simulator = new M32Simulator(0, logger) { ClipExcursionsEnabled = false };
+        simulator.Start();
+        Assert.True(simulator.IsRunning);
+        var client = new OscClient("127.0.0.1", simulator.LocalPort, 0);
         var channel = new MixerChannel("Test", 1, targetLevelDb: -25.0, preampGain: 0.0);
         var devices = new List<AudioDevice> { channel };
         var meter = new MeterReader(client, devices, windowMs: 2000);
@@ -38,7 +37,7 @@ public class SimulationLoopTests
         try
         {
             simulator.Start();
-            client.Connect();
+            Assert.True(client.Connect(), client.ConnectError);
             client.StartKeepAlive();
             meter.StartReading();
 
@@ -75,21 +74,20 @@ public class SimulationLoopTests
     public void DelayController_detects_fx_types_from_the_simulator()
     {
         var logger = new ShowLogger();
-        const int sendPort = 16723;
-        const int receivePort = 16724;
-
-        var simulator = new M32Simulator(sendPort, logger);
-        var client = new OscClient("127.0.0.1", sendPort, receivePort);
+        var simulator = new M32Simulator(0, logger);
+        simulator.Start();
+        Assert.True(simulator.IsRunning);
+        var client = new OscClient("127.0.0.1", simulator.LocalPort, 0);
         var delay = new DelayController(client, logger);
 
         try
         {
             simulator.Start();
-            client.Connect();
+            Assert.True(client.Connect(), client.ConnectError);
             delay.Start(); // subscribes and queries /fx/N/type
 
             Assert.True(
-                SpinUntil(() => delay.DetectedEffects.Count >= 4, 3000),
+                SpinUntil(() => Enumerable.Range(1, 4).All(delay.DetectedEffects.ContainsKey), 5000),
                 "the simulator never reported any FX types");
 
             // Simulator layout: slot 1 = Stereo Delay, 2 = 3-Tap, 3 = Modulation, 4 = Hall (no delay).

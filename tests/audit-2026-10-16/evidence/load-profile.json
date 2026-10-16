@@ -1,0 +1,15 @@
+{
+  "scenario": "32 channels \u002B 16 buses; simulator \u002B OSC \u002B all workers; memory logger; no dashboard",
+  "elapsedSeconds": 12.0072243,
+  "cpuMilliseconds": 359.375,
+  "allocatedBytes": 23574440,
+  "receivedPackets": 10297,
+  "initializedFaders": 48,
+  "headAmpsResolved": 32,
+  "deviceHistories": 48,
+  "gcCollections": [
+    0,
+    0,
+    0
+  ]
+}

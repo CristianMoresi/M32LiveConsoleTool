@@ -90,6 +90,8 @@ public class AntiClipper
 
     /// <summary>Tick of the last logged process-loop error, to throttle error logging.</summary>
     private long lastProcessErrorTick;
+    private readonly Dictionary<MixerChannel, long> cursors = new();
+    private long generation = -1;
 
     /// <summary>
     /// Mini-history of consecutive clip values per channel. When it fills to
@@ -98,8 +100,6 @@ public class AntiClipper
     /// </summary>
     private ConcurrentDictionary<MixerChannel, Queue<double>> recentClipsByChannel;
 
-    /// <summary>Time of the last reduction per channel. <c>null</c> = never, or out of cooldown.</summary>
-    private ConcurrentDictionary<MixerChannel, DateTime?> lastClipAtByChannel;
 
     /// <summary>
     /// <c>true</c> while a channel has already been warned that its gain sits at the
@@ -110,8 +110,6 @@ public class AntiClipper
     /// </summary>
     private ConcurrentDictionary<MixerChannel, bool> minGainWarnedByChannel;
 
-    /// <summary>Timestamp of the last processed sample per channel (de-duplication).</summary>
-    private ConcurrentDictionary<MixerChannel, DateTime?> lastSeenTimestampByChannel;
 
     /// <summary>Per-channel lock to synchronize access to its queue.</summary>
     private ConcurrentDictionary<MixerChannel, object> queueLockByChannel;
@@ -159,8 +157,6 @@ public class AntiClipper
         this.processThread = null;
 
         this.recentClipsByChannel = new ConcurrentDictionary<MixerChannel, Queue<double>>();
-        this.lastClipAtByChannel = new ConcurrentDictionary<MixerChannel, DateTime?>();
-        this.lastSeenTimestampByChannel = new ConcurrentDictionary<MixerChannel, DateTime?>();
         this.queueLockByChannel = new ConcurrentDictionary<MixerChannel, object>();
         this.minGainWarnedByChannel = new ConcurrentDictionary<MixerChannel, bool>();
 
@@ -230,7 +226,7 @@ public class AntiClipper
 
     private static void ValidateClipThreshold(double clipThresholdDb)
     {
-        if (clipThresholdDb > 0 || clipThresholdDb < -20)
+        if (!double.IsFinite(clipThresholdDb) || clipThresholdDb > 0 || clipThresholdDb < -20)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(clipThresholdDb),
@@ -240,7 +236,7 @@ public class AntiClipper
 
     private static void ValidateReductionStep(double reductionStepDb, double maxReductionStepDb)
     {
-        if (reductionStepDb < 0.1 || reductionStepDb > 12 || reductionStepDb > maxReductionStepDb)
+        if (!double.IsFinite(reductionStepDb) || reductionStepDb < 0.1 || reductionStepDb > 12 || reductionStepDb > maxReductionStepDb)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(reductionStepDb),
@@ -250,7 +246,7 @@ public class AntiClipper
 
     private static void ValidateMaxReductionStep(double maxReductionStepDb, double reductionStepDb)
     {
-        if (maxReductionStepDb < reductionStepDb || maxReductionStepDb > 12)
+        if (!double.IsFinite(maxReductionStepDb) || maxReductionStepDb < reductionStepDb || maxReductionStepDb > 12)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(maxReductionStepDb),
@@ -260,7 +256,7 @@ public class AntiClipper
 
     private static void ValidateSevereOvershoot(double severeOvershootDb)
     {
-        if (severeOvershootDb < 1 || severeOvershootDb > 18)
+        if (!double.IsFinite(severeOvershootDb) || severeOvershootDb < 1 || severeOvershootDb > 18)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(severeOvershootDb),
@@ -335,8 +331,6 @@ public class AntiClipper
             channels = updated;
 
             recentClipsByChannel.TryRemove(channel, out _);
-            lastClipAtByChannel.TryRemove(channel, out _);
-            lastSeenTimestampByChannel.TryRemove(channel, out _);
             queueLockByChannel.TryRemove(channel, out _);
             minGainWarnedByChannel.TryRemove(channel, out _);
         }
@@ -352,8 +346,6 @@ public class AntiClipper
     private void InitializeChannelState(MixerChannel channel)
     {
         recentClipsByChannel[channel] = new Queue<double>(confirmationSamples);
-        lastClipAtByChannel[channel] = null;
-        lastSeenTimestampByChannel[channel] = null;
         queueLockByChannel[channel] = new object();
         minGainWarnedByChannel[channel] = false;
     }
@@ -439,67 +431,57 @@ public class AntiClipper
     }
 
     /// <summary>
-    /// Evaluates a channel: gets its latest sample, checks whether it is new, and
-    /// if so analyzes whether it is clipping and whether to act.
+    /// Evaluates every new, fresh sample since the previous channel cursor.
     /// </summary>
-    private void EvaluateChannel(MixerChannel channel)
+    internal void EvaluateChannel(MixerChannel channel)
     {
-        // A muted channel is not audible, so never attenuate its preamp even if its
-        // pre-fader input is still clipping.
-        if (channel.IsMuted)
+        lock (oscClient.ControlLock)
         {
-            ClearClipHistory(channel);
-            return;
-        }
-
-        MeterSample? sample = meterReader.GetLatestSample(channel);
-
-        if (sample == null)
-        {
-            return;
-        }
-
-        // The channel might have been removed between the snapshot and here:
-        // defensive TryGetValue. If it is gone, skip this cycle.
-        if (!lastSeenTimestampByChannel.TryGetValue(channel, out DateTime? lastSeen))
-        {
-            return;
-        }
-
-        if (lastSeen != null && sample.Timestamp <= lastSeen.Value)
-        {
-            return;
-        }
-        lastSeenTimestampByChannel[channel] = sample.Timestamp;
-
-        double postTrimDb = sample.PostTrimDb;
-        if (double.IsNaN(postTrimDb))
-        {
-            return;
-        }
-
-        if (IsInCooldown(channel))
-        {
-            ClearClipHistory(channel);
-            return;
-        }
-
-        if (postTrimDb >= clipThresholdDb)
-        {
-            int currentCount = AddClipSample(channel, postTrimDb);
-
-            if (currentCount >= confirmationSamples)
+            if (generation != oscClient.Generation)
             {
-                double peakDb = GetPeakAndClearHistory(channel);
-                ApplyAdaptiveReduction(channel, peakDb);
+                generation = oscClient.Generation; cursors.Clear();
+                foreach (var c in channels) InitializeChannelState(c);
+            }
+            long cursor = cursors.GetValueOrDefault(channel);
+            var samples = channel.ReadSamplesSince(ref cursor);
+            cursors[channel] = cursor;
+            if (oscClient.WritesInhibited || !channel.ProtectionEnabled || !channel.MuteInitialized || channel.IsMuted
+                || !channel.HeadAmpResolved || !channel.HasFreshMeters || !channels.Contains(channel))
+            {
+                ClearClipHistory(channel);
+                return;
+            }
+            RetryPendingReduction(channel);
+            if (!channel.GainInitialized) { ClearClipHistory(channel); return; }
+            foreach (var sample in samples)
+            {
+                if (sample.AgeMs() >= AudioDevice.METER_MAX_AGE_MS || !double.IsFinite(sample.PostTrimDb))
+                { ClearClipHistory(channel); continue; }
+                if (IsInCooldown(channel) || !channel.GainInitialized) { ClearClipHistory(channel); continue; }
+                if (sample.PostTrimDb >= clipThresholdDb)
+                {
+                    if (AddClipSample(channel, sample.PostTrimDb) >= confirmationSamples)
+                        ApplyAdaptiveReduction(channel, GetPeakAndClearHistory(channel));
+                }
+                else { ClearClipHistory(channel); minGainWarnedByChannel[channel] = false; }
             }
         }
-        else
+    }
+
+    private void RetryPendingReduction(MixerChannel channel)
+    {
+        var gain = channel.Gain;
+        if (gain.PendingDb is not double pending || gain.LastReductionAt is not long last
+            || oscClient.Clock.GetElapsedTime(last).TotalMilliseconds < 1000
+            || oscClient.Clock.GetElapsedTime(gain.ObservedAt).TotalMilliseconds >= 1000
+            || gain.LastReportedDb < pending) return;
+        bool analog = channel.HeadAmpIndex >= 0;
+        string address = analog ? M32Buckets.BuildHeadAmpGainAddress(channel.HeadAmpIndex) : M32Buckets.BuildChannelTrimAddress(channel.OscNumber);
+        float value = FaderMath.Normalize(pending, analog ? -12 : -18, analog ? 60 : 18);
+        if (oscClient.SendControl(new OscMessage(address, ",f", new() { value })))
         {
-            // The clipping episode is over: clear the confirmation history and
-            // re-arm the at-minimum warning for the next episode.
-            ClearClipHistory(channel);
-            minGainWarnedByChannel[channel] = false;
+            gain.RecordRetry(oscClient.Clock.GetTimestamp());
+            oscClient.Send(new OscMessage(address, ",", new()));
         }
     }
 
@@ -589,26 +571,12 @@ public class AntiClipper
     /// </summary>
     public bool WasRecentlyReduced(MixerChannel channel)
     {
-        if (lastClipAtByChannel.TryGetValue(channel, out DateTime? last) && last != null)
-        {
-            return (DateTime.UtcNow - last.Value).TotalMilliseconds < RECENT_REDUCTION_HIGHLIGHT_MS;
-        }
-        return false;
+        return channel.Gain.LastReductionAt is long tick && oscClient.Clock.GetElapsedTime(tick).TotalMilliseconds < RECENT_REDUCTION_HIGHLIGHT_MS;
     }
 
     private bool IsInCooldown(MixerChannel channel)
     {
-        if (!lastClipAtByChannel.TryGetValue(channel, out DateTime? lastClipAt))
-        {
-            return false;
-        }
-        if (lastClipAt == null)
-        {
-            return false;
-        }
-
-        double elapsedMs = (DateTime.UtcNow - lastClipAt.Value).TotalMilliseconds;
-        return elapsedMs < cooldownMs;
+        return channel.Gain.LastReductionAt is long tick && oscClient.Clock.GetElapsedTime(tick).TotalMilliseconds < cooldownMs;
     }
 
     /// <summary>
@@ -622,100 +590,34 @@ public class AntiClipper
     /// </summary>
     private void ApplyAdaptiveReduction(MixerChannel channel, double peakClipDb)
     {
-        bool hasHeadAmp = channel.HeadAmpIndex >= 0;
-        double minGain = hasHeadAmp
-            ? M32Buckets.HEAD_AMP_GAIN_MIN_DB
-            : M32Buckets.CHANNEL_TRIM_MIN_DB;
-        double gainStep = hasHeadAmp
-            ? M32Buckets.HEAD_AMP_GAIN_STEP_DB
-            : M32Buckets.CHANNEL_TRIM_STEP_DB;
-
-        double previousGain = channel.PreampGain;
-
-        // Already at the console's minimum: a further reduction is impossible.
-        // Re-sending the same value and logging "reductions" that reduce nothing
-        // would only flood the dashboard; warn once per episode that the engineer
-        // has to act (back the source off, pad the mic, swap the DI).
-        if (previousGain <= minGain)
+        if (!channel.GainInitialized || !double.IsFinite(peakClipDb)) return;
+        var gain = channel.Gain;
+        bool analog = channel.HeadAmpIndex >= 0;
+        double minimum = analog ? M32Buckets.HEAD_AMP_GAIN_MIN_DB : M32Buckets.CHANNEL_TRIM_MIN_DB;
+        double maximum = analog ? M32Buckets.HEAD_AMP_GAIN_MAX_DB : M32Buckets.CHANNEL_TRIM_MAX_DB;
+        double quantum = analog ? M32Buckets.HEAD_AMP_GAIN_STEP_DB : M32Buckets.CHANNEL_TRIM_STEP_DB;
+        double previous = Math.Round(gain.ObservedDb / quantum) * quantum;
+        double requested = peakClipDb - clipThresholdDb >= severeOvershootDb ? maxReductionStepDb : reductionStepDb;
+        // Round toward attenuation: every accepted setting removes at least one physical step.
+        double next = Math.Max(minimum, Math.Floor((previous - requested + 1e-9) / quantum) * quantum);
+        double budget = channels.Where(c => ReferenceEquals(c.Gain, gain)).Min(c => c.MaxGainReductionDb);
+        if (next >= previous || gain.TotalReductionDb + previous - next > budget + 0.001)
         {
-            if (minGainWarnedByChannel.TryGetValue(channel, out bool warned) && !warned)
+            if (!minGainWarnedByChannel.GetValueOrDefault(channel))
             {
                 minGainWarnedByChannel[channel] = true;
-                logger.LogEvent(
-                    $"AntiClipper|{channel.Name}|at minimum gain ({minGain:F1}dB) and still clipping" +
-                    $"|peak={peakClipDb:+0.0;-0.0}dBFS|manual action required",
-                    Severity.Warning);
+                logger.LogEvent($"AntiClipper|{channel.Name}|gain limit reached; manual action required", Severity.Warning);
             }
-            lastClipAtByChannel[channel] = DateTime.UtcNow;
             return;
         }
-
-        double overshootDb = peakClipDb - clipThresholdDb;
-
-        double stepToApply;
-        bool isSevere;
-
-        if (overshootDb >= severeOvershootDb)
-        {
-            stepToApply = maxReductionStepDb;
-            isSevere = true;
-        }
-        else
-        {
-            stepToApply = reductionStepDb;
-            isSevere = false;
-        }
-
-        channel.ReducePreampGain(stepToApply);
-
-        // Clamp to the physical minimum the console enforces and quantize to its
-        // gain grid: the console rounds any in-between value anyway, so storing
-        // the rounded value keeps the local state identical to what the console
-        // will echo back.
-        double newGain = Math.Max(channel.PreampGain, minGain);
-        newGain = Math.Round(newGain / gainStep) * gainStep;
-        channel.PreampGain = Math.Max(newGain, minGain);
-
+        string address = analog ? M32Buckets.BuildHeadAmpGainAddress(channel.HeadAmpIndex) : M32Buckets.BuildChannelTrimAddress(channel.OscNumber);
+        var message = new OscMessage(address, ",f", new() { FaderMath.Normalize(next, minimum, maximum) });
+        if (!oscClient.SendControl(message)) return;
+        gain.RecordReduction(next, oscClient.Clock.GetTimestamp());
         minGainWarnedByChannel[channel] = false;
-        SendPreampUpdate(channel);
-        lastClipAtByChannel[channel] = DateTime.UtcNow;
-
-        string eventTag = isSevere ? "severe_reduction" : "reduction";
-
-        logger.LogEvent(
-            $"AntiClipper|{channel.Name}|{eventTag}|" +
-            $"{previousGain:F1}dB|{channel.PreampGain:F1}dB|" +
-            $"peak={peakClipDb:+0.0;-0.0}dBFS|overshoot={overshootDb:F1}dB|step={stepToApply:F1}dB",
-            Severity.Warning);
-    }
-
-    /// <summary>
-    /// Sends the channel's new preamp gain to the console via OSC, normalized to
-    /// the [0,1] range the console expects. If the console reported a head amp
-    /// feeding this channel (local XLR or AES50 stage box), it writes
-    /// <c>/headamp/NNN/gain</c>; otherwise (digital source, no head amp) it falls
-    /// back to the channel's digital trim <c>/ch/NN/preamp/trim</c>.
-    /// </summary>
-    private void SendPreampUpdate(MixerChannel channel)
-    {
-        string oscAddress;
-        float normalized;
-
-        if (channel.HeadAmpIndex >= 0)
-        {
-            oscAddress = M32Buckets.BuildHeadAmpGainAddress(channel.HeadAmpIndex);
-            normalized = FaderMath.Normalize(
-                channel.PreampGain, M32Buckets.HEAD_AMP_GAIN_MIN_DB, M32Buckets.HEAD_AMP_GAIN_MAX_DB);
-        }
-        else
-        {
-            oscAddress = M32Buckets.BuildChannelTrimAddress(channel.OscNumber);
-            normalized = FaderMath.Normalize(
-                channel.PreampGain, M32Buckets.CHANNEL_TRIM_MIN_DB, M32Buckets.CHANNEL_TRIM_MAX_DB);
-        }
-
-        OscMessage update = new OscMessage(oscAddress, ",f", new List<object> { normalized });
-        oscClient.Send(update);
+        logger.LogEvent($"AntiClipper|{channel.Name}|reduction|{previous:F2}dB -> {next:F2}dB|peak={peakClipDb:F1}dBFS", Severity.Warning);
+        // Confirmation is required before another reduction, including on a shared channel.
+        oscClient.Send(new OscMessage(address, ",", new()));
     }
 
     /// <summary>Logs a process-loop error at most once every few seconds.</summary>

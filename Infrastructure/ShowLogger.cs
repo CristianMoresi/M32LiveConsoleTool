@@ -1,163 +1,100 @@
+using System.Collections.Concurrent;
+
 namespace M32LiveConsoleTool.Infrastructure;
 
-/// <summary>
-/// Event logger for the show. Writes every important action to a text file and
-/// keeps a ring buffer of the most recent events in memory so the UI can show
-/// them live on the dashboard.
-/// </summary>
-/// <remarks>
-/// <para>
-/// <strong>Visibility policy</strong>: the in-memory ring keeps all events
-/// (Info, Warning, Error) up to its capacity. The UI queries only the important
-/// ones (Warning and Error) via <see cref="GetRecentImportantEvents"/> so the
-/// dashboard is not flooded with routine messages. The file on disk receives
-/// every event that reaches the logger.
-/// </para>
-/// </remarks>
+/// <summary>Bounded asynchronous disk logging; the dashboard never waits for disk I/O.</summary>
 public class ShowLogger
 {
     public const int RECENT_EVENTS_CAPACITY = 50;
-
-    private string logPath;
-    private StreamWriter? writer;
-    private bool isOpen;
-    private readonly LinkedList<LogEntry> recentEvents;
-    private readonly object writeLock = new object();
-
-    public ShowLogger()
-    {
-        this.logPath = "";
-        this.writer = null;
-        this.isOpen = false;
-        this.recentEvents = new LinkedList<LogEntry>();
-    }
-
-    public string LogPath
-    {
-        get { return logPath; }
-    }
-
-    public bool IsOpen
-    {
-        get { return isOpen; }
-    }
+    private readonly Queue<LogEntry> recent = new();
+    private readonly object sync = new();
+    private BlockingCollection<LogEntry>? pending;
+    private Thread? worker;
+    private volatile bool isOpen;
+    private long dropped;
+    public string LogPath { get; private set; } = "";
+    public bool IsOpen => isOpen;
+    public string? DiskError { get; private set; }
+    public long DroppedEvents => Interlocked.Read(ref dropped);
 
     public void Open(string path)
     {
+        Close();
         try
         {
-            writer = new StreamWriter(path, append: true);
-            logPath = path;
-            isOpen = true;
-
-            writer.WriteLine();
-            writer.WriteLine($"========== Session started: {DateTime.Now:yyyy-MM-dd HH:mm:ss} ==========");
-            writer.Flush();
+            var writer = new StreamWriter(path, append: true);
+            var queue = new BlockingCollection<LogEntry>(1024);
+            lock (sync) { pending = queue; LogPath = path; isOpen = true; DiskError = null; }
+            worker = new Thread(() => WriteLoop(queue, writer)) { IsBackground = true, Name = "Show log" };
+            worker.Start();
+            LogEvent("Session started", Severity.Info);
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // We cannot write to the Console here: the dashboard owns the screen.
-            // Disk logging is disabled, but the in-memory ring keeps working.
-            writer = null;
-            isOpen = false;
+            DiskError = ex.Message;
+            LogEvent($"Disk logging unavailable: {ex.Message}", Severity.Warning);
         }
     }
 
     public void LogEvent(string message, Severity severity)
     {
-        DateTime now = DateTime.Now;
-        LogEntry entry = new LogEntry(now, severity, message);
-
-        lock (writeLock)
+        var entry = new LogEntry(DateTime.Now, severity, message);
+        lock (sync)
         {
-            recentEvents.AddLast(entry);
-            while (recentEvents.Count > RECENT_EVENTS_CAPACITY)
-            {
-                recentEvents.RemoveFirst();
-            }
-
-            if (isOpen && writer != null)
-            {
-                string severityTag = severity.ToString().ToUpper().PadRight(7);
-                string line = $"{now:yyyy-MM-dd HH:mm:ss.fff} [{severityTag}] {message}";
-
-                try
-                {
-                    writer.WriteLine(line);
-                    writer.Flush();
-                }
-                catch
-                {
-                    // Ignore write errors so we never interfere with the dashboard.
-                }
-            }
+            recent.Enqueue(entry);
+            while (recent.Count > RECENT_EVENTS_CAPACITY) recent.Dequeue();
+            if (isOpen && pending != null && !pending.TryAdd(entry)) Interlocked.Increment(ref dropped);
         }
     }
 
-    /// <summary>
-    /// Returns the most recent events filtered to Warning and Error only. Info
-    /// events are omitted because they are routine and would flood the UI.
-    /// Returns up to <paramref name="maxCount"/> events in chronological order
-    /// (oldest first, newest last).
-    /// </summary>
     public List<LogEntry> GetRecentImportantEvents(int maxCount)
     {
-        lock (writeLock)
-        {
-            List<LogEntry> important = new List<LogEntry>();
+        lock (sync) return recent.Where(x => x.Severity is Severity.Warning or Severity.Error).TakeLast(Math.Max(0, maxCount)).ToList();
+    }
 
-            foreach (LogEntry entry in recentEvents)
+    private void WriteLoop(BlockingCollection<LogEntry> queue, StreamWriter writer)
+    {
+        try
+        {
+            using (writer)
             {
-                if (entry.Severity == Severity.Warning || entry.Severity == Severity.Error)
+                while (!queue.IsCompleted)
                 {
-                    important.Add(entry);
+                    if (queue.TryTake(out var entry, 250))
+                    {
+                        writer.WriteLine($"{entry.Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{entry.Severity}] {entry.Message}");
+                        for (int i = 0; i < 127 && queue.TryTake(out entry); i++)
+                            writer.WriteLine($"{entry.Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{entry.Severity}] {entry.Message}");
+                    }
+                    writer.Flush();
                 }
             }
-
-            if (important.Count <= maxCount)
-            {
-                return important;
-            }
-
-            // Return only the last maxCount.
-            return important.GetRange(important.Count - maxCount, maxCount);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            isOpen = false;
+            DiskError = ex.Message;
+            LogEvent($"Disk log stopped: {ex.Message}", Severity.Error);
         }
     }
 
     public void Close()
     {
-        lock (writeLock)
+        lock (sync)
         {
-            if (writer != null)
-            {
-                try
-                {
-                    writer.WriteLine($"========== Session ended: {DateTime.Now:yyyy-MM-dd HH:mm:ss} ==========");
-                    writer.Flush();
-                    writer.Close();
-                }
-                catch
-                {
-                }
-
-                writer = null;
-            }
-
+            if (pending == null) return;
+            pending.TryAdd(new LogEntry(DateTime.Now, Severity.Info, "Session ended"));
+            pending.CompleteAdding();
+            pending = null;
             isOpen = false;
         }
+        if (worker != Thread.CurrentThread && worker?.Join(5000) == false) DiskError = "Log flush did not complete within 5 seconds.";
     }
 }
 
-public class LogEntry
+public class LogEntry(DateTime timestamp, Severity severity, string message)
 {
-    public DateTime Timestamp { get; }
-    public Severity Severity { get; }
-    public string Message { get; }
-
-    public LogEntry(DateTime timestamp, Severity severity, string message)
-    {
-        Timestamp = timestamp;
-        Severity = severity;
-        Message = message;
-    }
+    public DateTime Timestamp { get; } = timestamp;
+    public Severity Severity { get; } = severity;
+    public string Message { get; } = message;
 }

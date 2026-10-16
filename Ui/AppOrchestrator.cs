@@ -64,9 +64,11 @@ public class AppOrchestrator
 
     private bool simulationMode;
     private bool isShutdown;
+    public string? SaveError { get; private set; }
+    public bool SessionSaved { get; private set; }
 
     /// <summary>UTC instant the session started (modules came up), for the uptime display.</summary>
-    private DateTime sessionStartUtc;
+    private long sessionStartedAt;
 
     /// <summary>Lock guaranteeing Shutdown runs only once even if called several times.</summary>
     private readonly object shutdownLock = new object();
@@ -104,7 +106,7 @@ public class AppOrchestrator
         config = new SessionConfig();
         isShutdown = false;
         simulationMode = false;
-        sessionStartUtc = DateTime.UtcNow;
+        sessionStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -142,7 +144,7 @@ public class AppOrchestrator
     /// Time elapsed since <see cref="Start"/> brought the session up. Shown in the
     /// dashboard header so the engineer can see how long the tool has been running.
     /// </summary>
-    public TimeSpan SessionUptime { get { return DateTime.UtcNow - sessionStartUtc; } }
+    public TimeSpan SessionUptime { get { return System.Diagnostics.Stopwatch.GetElapsedTime(sessionStartedAt); } }
 
     /// <summary>
     /// Lock shared with the dashboard and the menu to serialize console writes.
@@ -170,8 +172,21 @@ public class AppOrchestrator
     /// </summary>
     public static void WriteSession(SessionConfig config, string path)
     {
-        AppPaths.EnsureDirectoriesExist();
-        File.WriteAllText(path, JsonSerializer.Serialize(config, JsonWriteOptions));
+        string json = JsonSerializer.Serialize(config, JsonWriteOptions);
+        string target = Path.GetFullPath(path);
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        string temporary = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                byte[] bytes = System.Text.Encoding.UTF8.GetBytes(json);
+                stream.Write(bytes);
+                stream.Flush(flushToDisk: true);
+            }
+            File.Move(temporary, target, overwrite: true);
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
     /// <summary>
@@ -282,7 +297,7 @@ public class AppOrchestrator
     /// </summary>
     public void Start()
     {
-        sessionStartUtc = DateTime.UtcNow;
+        sessionStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
 
         if (simulationMode && simulator != null)
         {
@@ -334,6 +349,7 @@ public class AppOrchestrator
         }
         else
         {
+            oscClient!.ResumeWrites();
             autoLeveler.Start();
             config.AutoLevelerEnabled = true;
         }
@@ -353,6 +369,7 @@ public class AppOrchestrator
         }
         else
         {
+            oscClient!.ResumeWrites();
             antiClipper.Monitor();
             config.AntiClipperEnabled = true;
         }
@@ -366,10 +383,13 @@ public class AppOrchestrator
         if (bpmDetector!.IsEnabled)
         {
             bpmDetector.Stop();
+            delayController!.ClearTempo();
             config.BpmDetectorEnabled = false;
         }
         else
         {
+            oscClient!.ResumeWrites();
+            delayController!.ResumeControl();
             bpmDetector.Start();
             config.BpmDetectorEnabled = true;
         }
@@ -384,6 +404,8 @@ public class AppOrchestrator
     /// </summary>
     public void ReleaseAll()
     {
+        oscClient!.InhibitWrites();
+        delayController!.SuspendControl();
         if (autoLeveler!.IsEnabled)
         {
             autoLeveler.Stop();
@@ -610,6 +632,8 @@ public class AppOrchestrator
     /// </summary>
     public void ConfigureDelaySlot(int slot, DelaySlotConfig slotConfig)
     {
+        oscClient!.ResumeWrites();
+        delayController!.ResumeControl();
         delayController!.ConfigureSlot(slot, slotConfig);
 
         config.DelaySlots.RemoveAll(d => d.Slot == slot);
@@ -623,9 +647,9 @@ public class AppOrchestrator
 
         if (slotConfig.IsAutomatic)
         {
-            if (bpmDetector!.HasEverBeenValid)
+            if (bpmDetector!.IsTempoFresh)
             {
-                delayController.ApplyDelay(slot, slotConfig.GetDelayMs(bpmDetector.CurrentBpm), slotConfig.EffectType);
+                delayController.ApplyAllFromBpm(bpmDetector.CurrentBpm);
             }
         }
         else
@@ -676,7 +700,8 @@ public class AppOrchestrator
     /// </summary>
     public void SetMixerIp(string newIp)
     {
-        config.MixerIp = newIp;
+        if (!SessionConfig.IsValidMixerIp(newIp)) throw new ArgumentException("The mixer requires an IPv4 address.", nameof(newIp));
+        config.MixerIp = newIp.Trim();
 
         if (simulationMode || oscClient == null)
         {
@@ -724,6 +749,7 @@ public class AppOrchestrator
     /// </remarks>
     public void ResetSession()
     {
+        oscClient!.InhibitWrites();
         // Turn off the automatic modules.
         if (autoLeveler!.IsEnabled)
         {
@@ -799,6 +825,7 @@ public class AppOrchestrator
             isShutdown = true;
         }
 
+        oscClient?.InhibitWrites();
         try
         {
             bpmDetector?.Stop();
@@ -819,9 +846,12 @@ public class AppOrchestrator
             try
             {
                 SaveCurrentSession();
+                SessionSaved = !simulationMode;
             }
-            catch
+            catch (Exception ex)
             {
+                SaveError = ex.Message;
+                logger?.LogEvent($"Session save failed: {ex.Message}", Severity.Error);
             }
         }
 
@@ -1012,11 +1042,11 @@ public class AppOrchestrator
     /// <summary>
     /// Applies an already-loaded <see cref="SessionConfig"/> to the live program
     /// state: rebuilds AutoLeveler, AntiClipper and BpmDetector with the new
-    /// parameters, replaces the MeterReader's device list, and keeps the on/off
-    /// state of the modules that were already running. This is the core operation
+    /// parameters, replaces the MeterReader's device list, and applies the preset's
+    /// module flags while preserving an active panic inhibition. This is the core operation
     /// of <see cref="LoadPresetFrom"/>.
     /// </summary>
-    private void ApplyLoadedConfig(SessionConfig loaded)
+    public void ApplyLoadedConfig(SessionConfig loaded)
     {
         // Repair any out-of-range value first, so the constructors below cannot
         // throw on a hand-edited or corrupt preset.
@@ -1075,16 +1105,16 @@ public class AppOrchestrator
             loaded.BpmChangeHysteresis);
 
         // Everything built successfully: switch over to the new session.
-        bool autoLevelerWasOn = autoLeveler!.IsEnabled;
-        bool antiClipperWasOn = antiClipper!.IsEnabled;
-        bool bpmDetectorWasOn = bpmDetector!.IsEnabled;
+        bool wasInhibited = oscClient!.WritesInhibited;
+        oscClient.InhibitWrites();
 
-        autoLeveler.Stop();
-        antiClipper.Stop();
-        bpmDetector.Stop();
+        autoLeveler!.Stop();
+        antiClipper!.Stop();
+        bpmDetector!.Stop();
 
         config = loaded;
-        meterReader!.ReplaceDevices(newDevices);
+        meterReader!.WindowMs = loaded.MeterWindowMs;
+        meterReader.ReplaceDevices(newDevices);
 
         autoLeveler = newAutoLeveler;
         antiClipper = newAntiClipper;
@@ -1096,15 +1126,18 @@ public class AppOrchestrator
         }
         ApplyDelaySlotsFromConfig();
 
-        if (autoLevelerWasOn || loaded.AutoLevelerEnabled)
+        if (!wasInhibited) { oscClient.ResumeWrites(); delayController.ResumeControl(); }
+        delayController.ApplyAllCurrentSettings(0);
+
+        if (loaded.AutoLevelerEnabled)
         {
             autoLeveler.Start();
         }
-        if (antiClipperWasOn || loaded.AntiClipperEnabled)
+        if (loaded.AntiClipperEnabled)
         {
             antiClipper.Monitor();
         }
-        if (bpmDetectorWasOn || loaded.BpmDetectorEnabled)
+        if (loaded.BpmDetectorEnabled)
         {
             bpmDetector.Start();
         }

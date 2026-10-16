@@ -60,7 +60,7 @@ public class MeterReader
     /// Interval between <c>/renew</c> sends, in milliseconds. Subscriptions expire
     /// after 10 s; we renew every 8 s with margin.
     /// </summary>
-    private const int RENEW_INTERVAL_MS = 8000;
+    private const int RENEW_INTERVAL_MS = 1000;
 
     /// <summary>Sleep granularity inside the renew loop.</summary>
     private const int RENEW_SLEEP_TICK_MS = 100;
@@ -92,7 +92,10 @@ public class MeterReader
     private Thread? renewThread;
 
     /// <summary>Lock serializing modifications to the device list and the matching OSC subscription sync.</summary>
-    private readonly object devicesLock = new object();
+    private object devicesLock => oscClient.ControlLock;
+    private readonly Dictionary<int, GainState> headAmps = new();
+    private long lastVerification;
+    public OscClient Client => oscClient;
 
     /// <summary>
     /// Tick (<see cref="Environment.TickCount64"/>) of the last meter blob
@@ -125,6 +128,8 @@ public class MeterReader
         this.channelByAlias = new ConcurrentDictionary<string, MixerChannel>();
         this.busesAlias = "";
         this.renewThread = null;
+        foreach (var device in devices) device.Clock = oscClient.Clock;
+        oscClient.SessionInvalidated += ResetObservedState;
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -238,27 +243,22 @@ public class MeterReader
     /// </summary>
     public void ResubscribeAll()
     {
-        if (!isRunning)
-        {
-            return;
-        }
-
         lock (devicesLock)
         {
-            // The console behind the IP may be a different desk with different
-            // routing, so the head amp resolution must be re-established from
-            // scratch (BuildAllSubscriptions re-sends every /-ha query, and the
-            // renew thread retries any that go unanswered).
-            foreach (AudioDevice device in devices)
-            {
-                if (device is MixerChannel channel)
-                {
-                    channel.HeadAmpResolved = false;
-                }
-            }
-
+            oscClient.InvalidateSession();
+            if (!isRunning) return;
             BuildAllSubscriptions();
             QueryAllInitialState();
+        }
+    }
+
+    private void ResetObservedState()
+    {
+        lock (devicesLock)
+        {
+            headAmps.Clear();
+            Interlocked.Exchange(ref lastMeterTickMs, 0);
+            foreach (var device in devices) device.ResetObservedState();
         }
     }
 
@@ -282,6 +282,7 @@ public class MeterReader
 
             bool hadAnyBusBefore = ContainsAnyBus(devices);
 
+            device.Clock = oscClient.Clock;
             List<AudioDevice> updated = new List<AudioDevice>(devices);
             updated.Add(device);
             devices = updated;
@@ -358,6 +359,7 @@ public class MeterReader
         {
             List<AudioDevice> oldDevices = devices;
             List<AudioDevice> updated = new List<AudioDevice>(newDevices);
+            foreach (var device in updated) device.Clock = oscClient.Clock;
             devices = updated;
 
             if (!isRunning)
@@ -427,37 +429,7 @@ public class MeterReader
     /// <returns>Average level in dB, or -90 dB if there are no valid samples.</returns>
     public double GetMovingAverage(AudioDevice device)
     {
-        double sumPower = 0.0;
-        int valid = 0;
-
-        foreach (MeterSample sample in device.SnapshotHistory())
-        {
-            if (sample.AgeMs() <= windowMs)
-            {
-                // Average in the linear power domain, not the dB domain. Averaging
-                // dB readings arithmetically lets a few silent samples (which sit at
-                // the -90 dB floor) drag the result far below the real level of a
-                // signal with pauses; averaging power and converting back gives the
-                // level a meter would actually show.
-                double linear = sample.PostFaderLinear;
-                sumPower += linear * linear;
-                valid++;
-            }
-        }
-
-        if (valid == 0)
-        {
-            return -90.0;
-        }
-
-        double meanPower = sumPower / valid;
-        if (meanPower <= 0.0)
-        {
-            return -90.0;
-        }
-
-        double db = 10.0 * Math.Log10(meanPower);
-        return db < -90.0 ? -90.0 : db;
+        return device.GetAverageDb(windowMs);
     }
 
     /// <summary>
@@ -565,7 +537,7 @@ public class MeterReader
                 busesAlias,
                 M32Buckets.MIX_BUS_PAGE,
                 0,
-                M32Buckets.MIX_BUS_PAGE_FLOAT_COUNT - 1,
+                0,
                 FULL_SPEED_TIME_FACTOR
             });
 
@@ -670,22 +642,28 @@ public class MeterReader
                 break;
             }
 
-            if (IsReceivingMeters)
+            lock (devicesLock)
             {
-                // Healthy link: just refresh the existing subscriptions cheaply.
-                SendRenewAll();
-                RequeryUninitializedFaders();
-                RequeryUnresolvedHeadAmps();
-            }
-            else
-            {
-                // No meters arriving — the console may have rebooted (its
-                // subscription table is empty, and /renew only refreshes existing
-                // entries), just come online, or the socket may have failed to open
-                // at startup. Reopen the socket if needed and rebuild the
-                // subscriptions so streaming recovers automatically without a restart.
-                oscClient.EnsureConnected();
-                ResubscribeAll();
+                // Manual tap + FX can run with no watched audio devices.
+                // Absence of subscriptions is not a connection failure.
+                if (devices.Count == 0) { oscClient.EnsureConnected(); continue; }
+                if (IsReceivingMeters)
+                {
+                    // Healthy link: just refresh the existing subscriptions cheaply.
+                    SendRenewAll();
+                    RequeryUninitializedFaders();
+                    RequeryUnresolvedHeadAmps();
+                }
+                else
+                {
+                    // No meters arriving — the console may have rebooted (its
+                    // subscription table is empty, and /renew only refreshes existing
+                    // entries), just come online, or the socket may have failed to open
+                    // at startup. Reopen the socket if needed and rebuild the
+                    // subscriptions so streaming recovers automatically without a restart.
+                    oscClient.EnsureConnected();
+                    ResubscribeAll();
+                }
             }
         }
     }
@@ -699,10 +677,11 @@ public class MeterReader
     {
         foreach (AudioDevice device in devices)
         {
-            if (!device.FaderInitialized)
-            {
-                QueryDeviceFader(device);
-            }
+            device.ExpireUnconfirmedFader();
+            if (!device.FaderInitialized) QueryDeviceFader(device);
+            if (!device.MuteInitialized) QueryDeviceMute(device);
+            if (!device.HasFreshMeters && device is MixerChannel channel) SubscribeSingleChannel(channel);
+            if (!device.HasFreshMeters && device is Bus) SubscribeBusPage();
         }
     }
 
@@ -717,20 +696,35 @@ public class MeterReader
     /// </summary>
     private void RequeryUnresolvedHeadAmps()
     {
-        foreach (AudioDevice device in devices)
+        bool verify = oscClient.Clock.GetElapsedTime(lastVerification).TotalMilliseconds >= 900;
+        if (verify) lastVerification = oscClient.Clock.GetTimestamp();
+        foreach (var device in devices)
         {
-            if (device is MixerChannel channel && !channel.HeadAmpResolved)
-            {
-                QueryChannelHeadAmp(channel);
-            }
+            if (verify) { QueryDeviceFader(device); QueryDeviceMute(device); }
+            if (device is not MixerChannel channel) continue;
+            if (!channel.HeadAmpResolved || verify) QueryChannelHeadAmp(channel);
+            if (channel.HeadAmpResolved && (!channel.GainInitialized || verify)) QueryGain(channel);
         }
+    }
+
+    private void QueryGain(MixerChannel channel)
+    {
+        string address = channel.HeadAmpIndex >= 0
+            ? M32Buckets.BuildHeadAmpGainAddress(channel.HeadAmpIndex)
+            : M32Buckets.BuildChannelTrimAddress(channel.OscNumber);
+        oscClient.Send(new OscMessage(address, ",", new()));
     }
 
     // ─────────────────────────────────────────────────────────────────────
     // Receive and parse
     // ─────────────────────────────────────────────────────────────────────
 
-    private void OnMessageReceived(OscMessage message)
+    internal void OnMessageReceived(OscMessage message)
+    {
+        lock (devicesLock) HandleMessage(message);
+    }
+
+    private void HandleMessage(OscMessage message)
     {
         if (!isRunning)
         {
@@ -740,6 +734,17 @@ public class MeterReader
         // Fader position feedback from the console (/xremote echoes plus replies
         // to our initial queries). These messages do not carry the app alias
         // prefix, so they are handled before the meter-blob path below.
+        if (message.Address.EndsWith("/config/source", StringComparison.Ordinal)
+            || message.Address.StartsWith("/config/routing", StringComparison.Ordinal)
+            || message.Address.StartsWith("/config/scene", StringComparison.Ordinal)
+            || message.Address.StartsWith("/-show/", StringComparison.Ordinal))
+        {
+            oscClient.InvalidateSession();
+            BuildAllSubscriptions();
+            QueryAllInitialState();
+            return;
+        }
+
         if (TryHandleFaderFeedback(message))
         {
             return;
@@ -767,7 +772,10 @@ public class MeterReader
 
         float[] meters = ParseMeterBlob(blob);
 
-        // A meter blob just arrived: the console link is alive.
+        // Only known aliases with complete, finite payloads count as live meters.
+        int required = message.Address == busesAlias ? M32Buckets.MIX_BUS_PAGE_FLOAT_COUNT : 4;
+        if ((message.Address != busesAlias && !channelByAlias.ContainsKey(message.Address))
+            || meters.Length < required || meters.Any(x => !float.IsFinite(x) || x < 0)) return;
         Interlocked.Exchange(ref lastMeterTickMs, Environment.TickCount64);
 
         if (message.Address == busesAlias)
@@ -884,12 +892,7 @@ public class MeterReader
     }
 
     /// <summary>Asks the console for a head amp's current gain, to seed the real value.</summary>
-    private void QueryHeadAmpGain(int headAmpIndex)
-    {
-        OscMessage query = new OscMessage(
-            M32Buckets.BuildHeadAmpGainAddress(headAmpIndex), ",", new List<object>());
-        oscClient.Send(query);
-    }
+
 
     /// <summary>
     /// Handles the console's replies to head amp queries: <c>/-ha/NN/index</c>
@@ -899,43 +902,44 @@ public class MeterReader
     private bool TryHandleHeadAmpFeedback(OscMessage message)
     {
         string address = message.Address;
-
-        if (address.StartsWith("/-ha/", StringComparison.Ordinal)
-            && address.EndsWith("/index", StringComparison.Ordinal))
+        if (address.StartsWith("/-ha/", StringComparison.Ordinal) && address.EndsWith("/index", StringComparison.Ordinal))
         {
-            if (message.Arguments.Count > 0 && message.Arguments[0] is int headAmpIndex)
+            if (message.Arguments.FirstOrDefault() is int index && index >= -1 && index <= 127)
             {
-                int inputIndex = ParseAddressNumber(address);
-                MixerChannel? channel = FindChannelByOscNumber(inputIndex + 1);
+                var channel = FindChannelByOscNumber(ParseAddressNumber(address) + 1);
                 if (channel != null)
                 {
-                    channel.HeadAmpIndex = headAmpIndex;
-                    channel.HeadAmpResolved = true; // even -1 (digital source) is a definitive answer
-                    if (headAmpIndex >= 0)
+                    bool changed = !channel.HeadAmpResolved || channel.HeadAmpIndex != index;
+                    if (changed)
                     {
-                        QueryHeadAmpGain(headAmpIndex); // seed the real gain
+                        channel.InvalidateRouting();
+                        channel.HeadAmpIndex = index;
+                        if (index >= 0)
+                        {
+                            if (!headAmps.TryGetValue(index, out var gain)) headAmps[index] = gain = new GainState();
+                            channel.Gain = gain;
+                        }
                     }
+                    channel.HeadAmpResolved = true;
+                    if (changed || !channel.GainInitialized) QueryGain(channel);
                 }
             }
             return true;
         }
-
-        if (address.StartsWith("/headamp/", StringComparison.Ordinal)
-            && address.EndsWith("/gain", StringComparison.Ordinal))
+        if (message.Arguments.FirstOrDefault() is not float value || !float.IsFinite(value) || value < 0 || value > 1) return false;
+        if (address.StartsWith("/headamp/", StringComparison.Ordinal) && address.EndsWith("/gain", StringComparison.Ordinal))
         {
-            if (message.Arguments.Count > 0 && message.Arguments[0] is float normalized)
-            {
-                int headAmpIndex = ParseAddressNumber(address);
-                MixerChannel? channel = FindChannelByHeadAmpIndex(headAmpIndex);
-                if (channel != null)
-                {
-                    channel.PreampGain = FaderMath.Denormalize(
-                        normalized, M32Buckets.HEAD_AMP_GAIN_MIN_DB, M32Buckets.HEAD_AMP_GAIN_MAX_DB);
-                }
-            }
+            if (headAmps.TryGetValue(ParseAddressNumber(address), out var gain))
+                gain.Observe(FaderMath.Denormalize(value, M32Buckets.HEAD_AMP_GAIN_MIN_DB, M32Buckets.HEAD_AMP_GAIN_MAX_DB), oscClient.Clock.GetTimestamp());
             return true;
         }
-
+        if (address.StartsWith("/ch/", StringComparison.Ordinal) && address.EndsWith("/preamp/trim", StringComparison.Ordinal))
+        {
+            var channel = FindChannelByOscNumber(ParseAddressNumber(address));
+            if (channel is { HeadAmpResolved: true, HeadAmpIndex: -1 })
+                channel.Gain.Observe(FaderMath.Denormalize(value, M32Buckets.CHANNEL_TRIM_MIN_DB, M32Buckets.CHANNEL_TRIM_MAX_DB), oscClient.Clock.GetTimestamp());
+            return true;
+        }
         return false;
     }
 
@@ -964,17 +968,7 @@ public class MeterReader
     }
 
     /// <summary>Finds a watched channel by its head amp index, or <c>null</c>.</summary>
-    private MixerChannel? FindChannelByHeadAmpIndex(int headAmpIndex)
-    {
-        foreach (AudioDevice device in devices)
-        {
-            if (device is MixerChannel channel && channel.HeadAmpIndex == headAmpIndex)
-            {
-                return channel;
-            }
-        }
-        return null;
-    }
+
 
     /// <summary>
     /// Decodes an M32 meter blob: a 32-bit little-endian float count followed by
@@ -1025,7 +1019,7 @@ public class MeterReader
             meters[postTrimIdx],
             meters[gateIdx],
             meters[compIdx],
-            meters[postFaderIdx]);
+            meters[postFaderIdx], oscClient.Clock);
 
         channel.AddSample(sample);
     }
@@ -1058,7 +1052,7 @@ public class MeterReader
                 continue;
             }
 
-            bus.AddSample(new MeterSample(meters[positionInBlob]));
+            bus.AddSample(new MeterSample(meters[positionInBlob], oscClient.Clock));
         }
     }
 }

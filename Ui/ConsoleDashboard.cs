@@ -784,13 +784,14 @@ public class ConsoleDashboard
         string mixerIp = orchestrator.SimulationMode
             ? "127.0.0.1 (simulated)" : orchestrator.Config.MixerIp;
         bool receiving = orchestrator.MeterReader.IsReceivingMeters;
-        string link = receiving ? "receiving meters" : "NO SIGNAL";
+        int pending = orchestrator.MeterReader.Devices.Count(d => !d.FaderInitialized || !d.MuteInitialized || !d.HasFreshMeters || (d is MixerChannel c && !c.GainInitialized));
+        string link = orchestrator.OscClient.WritesInhibited ? "RELEASED"
+            : !receiving ? "NO SIGNAL" : pending > 0 ? $"SYNC {pending}" : "LIVE";
         string line2 = PadPlain(
             $"  Time: {time}   Up: {uptime}   Mixer: {mixerIp}  [{link}]", width);
         // Color only the link token; codes are zero-width so the padding stays correct.
-        line2 = receiving
-            ? line2.Replace("receiving meters", COL_GREEN + "receiving meters" + COL_RESET)
-            : line2.Replace("NO SIGNAL", COL_RED + "NO SIGNAL" + COL_RESET);
+        string linkColor = !receiving ? COL_RED : pending > 0 || orchestrator.OscClient.WritesInhibited ? COL_YELLOW : COL_GREEN;
+        line2 = line2.Replace(link, linkColor + link + COL_RESET);
         SetRowRaw(rows, startRow + 1, line2);
 
         string al = orchestrator.AutoLeveler.IsEnabled ? "[ON] " : "[OFF]";
@@ -913,10 +914,10 @@ public class ConsoleDashboard
         string source;
         if (device is MixerChannel ch)
         {
-            preamp = $"{ch.PreampGain:F1}";
+            preamp = ch.GainInitialized ? $"{ch.PreampGain:F1}" : "?";
             // Where the gain is controlled: a head amp (local XLR or AES50 stage
             // box) or the channel's digital trim.
-            source = ch.HeadAmpIndex >= 0 ? $"HA{ch.HeadAmpIndex}" : "trim";
+            source = !ch.HeadAmpResolved ? "?" : ch.HeadAmpIndex >= 0 ? $"HA{ch.HeadAmpIndex}" : "trim";
         }
         else
         {
@@ -924,7 +925,7 @@ public class ConsoleDashboard
             source = "---";
         }
 
-        string mute = device.IsMuted ? "M" : " ";
+        string mute = !device.MuteInitialized ? "?" : device.IsMuted ? "M" : !device.HasFreshMeters ? "S" : !device.AutoLevelEnabled ? "-" : " ";
 
         // Mark the channel the BpmDetector reads its tempo from.
         string marker = device is MixerChannel bpmCh

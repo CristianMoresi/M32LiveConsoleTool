@@ -28,7 +28,7 @@ public class SessionConfig
     public int MixerReceivePort { get; set; } = DEFAULT_RECEIVE_PORT;
 
     /// <summary>
-    /// Validates that a string is a usable mixer address: a parseable IPv4 or IPv6
+    /// Validates that a string is a usable mixer address: a parseable IPv4
     /// literal. The M32 is always reached at a fixed IP on the local network, so a
     /// hostname is intentionally rejected to catch typos that would otherwise
     /// silently stop meters from arriving with no visible reason.
@@ -36,7 +36,8 @@ public class SessionConfig
     public static bool IsValidMixerIp(string? ip)
     {
         return !string.IsNullOrWhiteSpace(ip)
-            && System.Net.IPAddress.TryParse(ip.Trim(), out _);
+            && System.Net.IPAddress.TryParse(ip.Trim(), out var address)
+            && address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork;
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -115,6 +116,23 @@ public class SessionConfig
     {
         SessionConfig defaults = new SessionConfig();
 
+        if (!double.IsFinite(AutoLevelerThresholdDb)) AutoLevelerThresholdDb = defaults.AutoLevelerThresholdDb;
+        if (!double.IsFinite(AutoLevelerSlewUpDbPerSec)) AutoLevelerSlewUpDbPerSec = defaults.AutoLevelerSlewUpDbPerSec;
+        if (!double.IsFinite(AutoLevelerSlewDownDbPerSec)) AutoLevelerSlewDownDbPerSec = defaults.AutoLevelerSlewDownDbPerSec;
+        if (!double.IsFinite(AutoLevelerGateThresholdDb)) AutoLevelerGateThresholdDb = defaults.AutoLevelerGateThresholdDb;
+        if (!double.IsFinite(AutoLevelerDropLimitDb)) AutoLevelerDropLimitDb = defaults.AutoLevelerDropLimitDb;
+        if (!double.IsFinite(AntiClipperClipThresholdDb)) AntiClipperClipThresholdDb = defaults.AntiClipperClipThresholdDb;
+        if (!double.IsFinite(AntiClipperReductionStepDb)) AntiClipperReductionStepDb = defaults.AntiClipperReductionStepDb;
+        if (!double.IsFinite(AntiClipperMaxReductionStepDb)) AntiClipperMaxReductionStepDb = defaults.AntiClipperMaxReductionStepDb;
+        if (!double.IsFinite(AntiClipperSevereOvershootDb)) AntiClipperSevereOvershootDb = defaults.AntiClipperSevereOvershootDb;
+        if (!double.IsFinite(BpmTransientThresholdDb)) BpmTransientThresholdDb = defaults.BpmTransientThresholdDb;
+        if (!double.IsFinite(BpmChangeHysteresis)) BpmChangeHysteresis = defaults.BpmChangeHysteresis;
+        AutoLevelerGateThresholdDb = Math.Clamp(AutoLevelerGateThresholdDb, -90, 0);
+        if (!Enum.IsDefined(BpmDetectorMode)) BpmDetectorMode = defaults.BpmDetectorMode;
+        BpmTargetChannelOscNumber = Math.Clamp(BpmTargetChannelOscNumber, 0, 32);
+        WatchedDevices ??= new();
+        DelaySlots ??= new();
+
         // Mixer address. A hand-edited file with a hostname or garbage here would
         // leave the app silently sending to nowhere (every UDP send fails and is
         // swallowed), showing NO SIGNAL with no clue why. Reset to the placeholder
@@ -170,6 +188,7 @@ public class SessionConfig
         List<AudioDeviceDescriptor> valid = new List<AudioDeviceDescriptor>();
         foreach (AudioDeviceDescriptor d in WatchedDevices)
         {
+            if (d == null) continue;
             bool isChannel = d.Type == "channel";
             bool isBus = d.Type == "bus";
             if (!isChannel && !isBus)
@@ -185,6 +204,11 @@ public class SessionConfig
 
             if (seen.Add($"{d.Type}:{d.OscNumber}"))
             {
+                d.Name = string.IsNullOrWhiteSpace(d.Name) ? $"{d.Type} {d.OscNumber}" : d.Name;
+                d.TargetLevelDb = double.IsFinite(d.TargetLevelDb) ? Math.Clamp(d.TargetLevelDb, -90, 10) : -18;
+                d.PreampGain = double.IsFinite(d.PreampGain) ? Math.Clamp(d.PreampGain, -18, 60) : 0;
+                d.MaxFaderDb = double.IsFinite(d.MaxFaderDb) ? Math.Clamp(d.MaxFaderDb, -90, 10) : 10;
+                d.MaxGainReductionDb = double.IsFinite(d.MaxGainReductionDb) ? Math.Clamp(d.MaxGainReductionDb, 0, 72) : 24;
                 valid.Add(d);
             }
         }
@@ -193,7 +217,7 @@ public class SessionConfig
 
     /// <summary>
     /// Repairs the delay-slot list so rebuilding the slots can never throw:
-    /// drops slots whose number is outside the console's 1-8 range (the
+    /// drops slots whose number is outside the console's delay-capable 1-4 range (the
     /// controller's <c>ConfigureSlot</c> rejects them), resets enum values that do
     /// not exist (a hand-edited number deserializes into an undefined enum), clamps
     /// a manual time into the 1-3000 ms range every M32 delay supports
@@ -207,7 +231,7 @@ public class SessionConfig
         List<DelaySlotDescriptor> valid = new List<DelaySlotDescriptor>();
         foreach (DelaySlotDescriptor s in DelaySlots)
         {
-            if (s.Slot < 1 || s.Slot > 8)
+            if (s == null || s.Slot < 1 || s.Slot > 4)
             {
                 continue;
             }
@@ -222,7 +246,7 @@ public class SessionConfig
             }
             if (!s.IsAutomatic)
             {
-                s.ManualMs = DelayEffects.ClampTimeMs(s.ManualMs);
+                s.ManualMs = double.IsFinite(s.ManualMs) ? DelayEffects.ClampTimeMs(s.ManualMs) : 500;
             }
 
             if (seen.Add(s.Slot))

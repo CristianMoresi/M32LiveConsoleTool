@@ -1,0 +1,7 @@
+{
+  "devices": 48,
+  "samplesPerDevice": 100,
+  "calls": 48000,
+  "allocatedBytes": 6360,
+  "elapsedMs": 110.4519
+}

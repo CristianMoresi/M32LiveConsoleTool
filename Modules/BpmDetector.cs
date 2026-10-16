@@ -117,10 +117,14 @@ public class BpmDetector
     private List<DateTime> longWindow;
 
     /// <summary>Lock protecting both windows.</summary>
-    private readonly object windowLock = new object();
+    private object windowLock => meterReader.Client.ControlLock;
+    private long sampleCursor;
+    private long generation = -1;
+    private DateTime lastProcessedTransient = DateTime.MinValue;
+    private DateTime MonotonicNow => ToMonotonicDate(meterReader.Client.Clock.GetTimestamp());
+    private DateTime ToMonotonicDate(long tick) => DateTime.UnixEpoch + meterReader.Client.Clock.GetElapsedTime(0, tick);
+    public bool IsTempoFresh => generation == meterReader.Client.Generation && hasEverBeenValid && LastBpmAgeMs < DelayController.TEMPO_MAX_AGE_MS;
 
-    /// <summary>Timestamp of the last processed sample (de-duplication).</summary>
-    private DateTime? lastSeenTimestamp;
 
     /// <summary>Edge-detection state.</summary>
     private bool wasAboveThreshold;
@@ -174,6 +178,7 @@ public class BpmDetector
         this.delayController = delayController;
         this.logger = logger;
         this.targetChannel = targetChannel;
+        if (!Enum.IsDefined(mode)) throw new ArgumentOutOfRangeException(nameof(mode));
         this.mode = mode;
         this.transientThresholdDb = transientThresholdDb;
         this.bpmChangeHysteresis = bpmChangeHysteresis;
@@ -182,7 +187,7 @@ public class BpmDetector
 
         this.shortWindow = new List<DateTime>();
         this.longWindow = new List<DateTime>();
-        this.lastSeenTimestamp = null;
+
         this.wasAboveThreshold = false;
         this.currentBpm = 0.0;
         this.hasEverBeenValid = false;
@@ -204,28 +209,7 @@ public class BpmDetector
     public MixerChannel TargetChannel
     {
         get { return targetChannel; }
-        set
-        {
-            if (ReferenceEquals(targetChannel, value))
-            {
-                return;
-            }
-
-            targetChannel = value;
-
-            lock (windowLock)
-            {
-                shortWindow.Clear();
-                longWindow.Clear();
-            }
-            lastSeenTimestamp = null;
-            wasAboveThreshold = false;
-            ResetCandidate();
-
-            logger.LogEvent(
-                $"BpmDetector|system|target_channel_changed|{value.Name}",
-                Severity.Info);
-        }
+        set { lock (windowLock) { if (ReferenceEquals(targetChannel, value)) return; targetChannel = value; ResetTracking(); } }
     }
 
     /// <summary>
@@ -237,26 +221,8 @@ public class BpmDetector
         get { return mode; }
         set
         {
-            if (mode == value)
-            {
-                return;
-            }
-
-            BpmDetectionMode previous = mode;
-            mode = value;
-
-            lock (windowLock)
-            {
-                shortWindow.Clear();
-                longWindow.Clear();
-            }
-            lastSeenTimestamp = null;
-            wasAboveThreshold = false;
-            ResetCandidate();
-
-            logger.LogEvent(
-                $"BpmDetector|system|mode_changed|from={previous}|to={value}",
-                Severity.Info);
+            if (!Enum.IsDefined(value)) throw new ArgumentOutOfRangeException(nameof(value));
+            lock (windowLock) { if (mode == value) return; mode = value; ResetTracking(); }
         }
     }
 
@@ -282,7 +248,7 @@ public class BpmDetector
 
     private static void ValidateTransientThreshold(double transientThresholdDb)
     {
-        if (transientThresholdDb > 0 || transientThresholdDb < -60)
+        if (!double.IsFinite(transientThresholdDb) || transientThresholdDb > 0 || transientThresholdDb < -60)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(transientThresholdDb),
@@ -292,7 +258,7 @@ public class BpmDetector
 
     private static void ValidateHysteresis(double bpmChangeHysteresis)
     {
-        if (bpmChangeHysteresis < 0 || bpmChangeHysteresis > 20)
+        if (!double.IsFinite(bpmChangeHysteresis) || bpmChangeHysteresis < 0 || bpmChangeHysteresis > 20)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(bpmChangeHysteresis),
@@ -331,7 +297,7 @@ public class BpmDetector
             {
                 return 0.0;
             }
-            return (DateTime.UtcNow - lastTransientUtc).TotalMilliseconds;
+            return (MonotonicNow - lastTransientUtc).TotalMilliseconds;
         }
     }
 
@@ -385,7 +351,22 @@ public class BpmDetector
     /// </summary>
     public void TapTempo()
     {
-        RegisterTransient(DateTime.UtcNow);
+        lock (windowLock) { EnsureGeneration(); RegisterTransient(MonotonicNow); }
+    }
+
+    private void EnsureGeneration()
+    {
+        if (generation == meterReader.Client.Generation) return;
+        generation = meterReader.Client.Generation;
+        ResetTracking();
+    }
+
+    private void ResetTracking()
+    {
+        shortWindow.Clear(); longWindow.Clear(); sampleCursor = 0;
+        wasAboveThreshold = false; hasEverBeenValid = false; currentBpm = lastNotifiedBpm = 0;
+        lastProcessedTransient = lastTransientUtc = lastChangeEvidenceUtc = DateTime.MinValue;
+        ResetCandidate(); delayController.ClearTempo();
     }
 
     /// <summary>
@@ -449,12 +430,16 @@ public class BpmDetector
             {
                 // In Click and BeatTracking, read from the channel. In ManualTap,
                 // transients come only from TapTempo() invoked externally.
-                if (mode != BpmDetectionMode.ManualTap)
+                lock (windowLock)
                 {
-                    DetectTransientsFromChannel();
-                }
+                    EnsureGeneration();
+                    if (mode != BpmDetectionMode.ManualTap)
+                    {
+                        DetectTransientsFromChannel();
+                    }
 
-                TryUpdateBpm();
+                    TryUpdateBpm();
+                }
             }
             catch (Exception ex)
             {
@@ -476,37 +461,17 @@ public class BpmDetector
     /// Reads the target channel's latest sample and applies edge detection to add
     /// a transient if appropriate.
     /// </summary>
-    private void DetectTransientsFromChannel()
+    internal void DetectTransientsFromChannel()
     {
-        MeterSample? sample = meterReader.GetLatestSample(targetChannel);
-
-        if (sample == null)
+        var samples = targetChannel.ReadSamplesSince(ref sampleCursor);
+        if (!targetChannel.HasFreshMeters) { wasAboveThreshold = false; return; }
+        foreach (var sample in samples)
         {
-            return;
+            if (sample.AgeMs() >= AudioDevice.METER_MAX_AGE_MS || !double.IsFinite(sample.PostTrimDb)) continue;
+            bool above = sample.PostTrimDb >= transientThresholdDb;
+            if (above && !wasAboveThreshold) RegisterTransient(ToMonotonicDate(sample.MonotonicTimestamp));
+            wasAboveThreshold = above;
         }
-
-        if (lastSeenTimestamp != null && sample.Timestamp <= lastSeenTimestamp.Value)
-        {
-            return;
-        }
-        lastSeenTimestamp = sample.Timestamp;
-
-        double postTrimDb = sample.PostTrimDb;
-        if (double.IsNaN(postTrimDb))
-        {
-            return;
-        }
-
-        bool isAboveThreshold = postTrimDb >= transientThresholdDb;
-
-        // Edge detection: only register if the previous sample was below and this
-        // one crosses upward.
-        if (isAboveThreshold && !wasAboveThreshold)
-        {
-            RegisterTransient(sample.Timestamp);
-        }
-
-        wasAboveThreshold = isAboveThreshold;
     }
 
     /// <summary>
@@ -516,8 +481,10 @@ public class BpmDetector
     /// clearly different reading must be confirmed several times before it is taken
     /// as a real change.
     /// </summary>
-    private void TryUpdateBpm()
+    internal void TryUpdateBpm()
     {
+        if (lastTransientUtc <= lastProcessedTransient) return;
+        lastProcessedTransient = lastTransientUtc;
         double? candidate = ComputeBpmCandidate(shortWindow);
 
         if (candidate == null)
@@ -711,14 +678,15 @@ public class BpmDetector
         currentBpm = newBpm;
         hasEverBeenValid = true;
 
-        if (Math.Abs(newBpm - lastNotifiedBpm) >= bpmChangeHysteresis)
+        if (Math.Abs(newBpm - lastNotifiedBpm) >= Math.Max(0.0001, bpmChangeHysteresis))
         {
             lastNotifiedBpm = newBpm;
-            delayController.ApplyAllFromBpm(newBpm);
             logger.LogEvent(
                 $"BpmDetector|system|bpm_updated|{newBpm:F1}|reason={reason}",
                 Severity.Info);
         }
+        // New evidence refreshes validity, while the musical hysteresis still governs changes.
+        delayController.ApplyAllFromBpm(lastNotifiedBpm);
     }
 
     private void ResetCandidate()

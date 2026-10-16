@@ -27,6 +27,9 @@ env:
   DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
 
 jobs:
+  quality:
+    uses: ./.github/workflows/ci.yml
+
   validate:
     name: Build, test and read version
     runs-on: ubuntu-latest
@@ -76,7 +79,7 @@ jobs:
 
   build:
     name: Publish ${{ matrix.rid }}
-    needs: validate
+    needs: [validate, quality]
     if: needs.validate.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     strategy:

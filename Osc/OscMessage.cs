@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Text;
 
 namespace M32LiveConsoleTool.Osc;
@@ -83,260 +84,80 @@ public class OscMessage
     /// <returns>Byte array with the message encoded per OSC 1.0.</returns>
     public byte[] Encode()
     {
-        // Accumulate bytes in a temporary list and convert to an array at the
-        // end. This is the most readable way to build the message.
-        List<byte> result = new List<byte>();
-
-        // Block 1: OSC address.
-        result.AddRange(EncodeString(address));
-
-        // Block 2: type tags.
-        result.AddRange(EncodeString(typeTags));
-
-        // Block 3: arguments. Walk the type tags, skipping the leading comma, and
-        // take the matching argument for each letter.
-        for (int i = 0; i < typeTags.Length - 1; i++)
+        if (!address.StartsWith('/') || !typeTags.StartsWith(',') || typeTags.Length - 1 != arguments.Count)
+            throw new FormatException("OSC address, tags and argument count do not agree.");
+        int size = PaddedStringSize(address) + PaddedStringSize(typeTags);
+        foreach (object argument in arguments)
+            size = checked(size + (argument is string text ? PaddedStringSize(text) : argument is byte[] blob ? 4 + Padded(blob.Length) : 4));
+        byte[] data = new byte[size];
+        int offset = 0;
+        WriteString(address, data, ref offset);
+        WriteString(typeTags, data, ref offset);
+        for (int i = 0; i < arguments.Count; i++)
         {
-            char tag = typeTags[i + 1];        // skip the comma at index 0
-            object arg = arguments[i];
-
-            switch (tag)
+            switch (typeTags[i + 1])
             {
-                case 'i':
-                    result.AddRange(EncodeInt((int)arg));
-                    break;
-                case 'f':
-                    result.AddRange(EncodeFloat((float)arg));
-                    break;
-                case 's':
-                    result.AddRange(EncodeString((string)arg));
-                    break;
+                case 'i': BinaryPrimitives.WriteInt32BigEndian(data.AsSpan(offset, 4), (int)arguments[i]); offset += 4; break;
+                case 'f': BinaryPrimitives.WriteSingleBigEndian(data.AsSpan(offset, 4), (float)arguments[i]); offset += 4; break;
+                case 's': WriteString((string)arguments[i], data, ref offset); break;
                 case 'b':
-                    result.AddRange(EncodeBlob((byte[])arg));
-                    break;
-                default:
-                    throw new NotSupportedException($"Unsupported type tag: '{tag}'");
+                    byte[] blob = (byte[])arguments[i];
+                    BinaryPrimitives.WriteInt32BigEndian(data.AsSpan(offset, 4), blob.Length); offset += 4;
+                    blob.CopyTo(data, offset); offset += Padded(blob.Length); break;
+                default: throw new NotSupportedException($"Unsupported OSC tag: {typeTags[i + 1]}");
             }
         }
-
-        return result.ToArray();
+        return data;
     }
 
-    /// <summary>
-    /// Rebuilds an OSC message from bytes received over UDP.
-    /// </summary>
-    /// <param name="data">Byte array received from the console.</param>
-    /// <returns>A new <see cref="OscMessage"/> with the decoded content.</returns>
+    private static int Padded(int length) => checked((length + 3) / 4 * 4);
+    private static int PaddedStringSize(string text) => Padded(Encoding.ASCII.GetByteCount(text) + 1);
+    private static void WriteString(string text, byte[] data, ref int offset)
+    {
+        if (text.Contains('\0')) throw new FormatException("Embedded NUL in OSC string.");
+        Encoding.ASCII.GetBytes(text, data.AsSpan(offset));
+        offset += PaddedStringSize(text);
+    }
+
     public static OscMessage Decode(byte[] data)
     {
         int offset = 0;
-
-        // Read the address and advance the cursor.
-        string address = DecodeString(data, ref offset);
-
-        // Read the type tags and advance the cursor.
-        string typeTags = DecodeString(data, ref offset);
-
-        // Read the arguments one by one, following the type tags.
-        List<object> arguments = new List<object>();
-        for (int i = 0; i < typeTags.Length - 1; i++)
+        string address = ReadString(data, ref offset);
+        string tags = ReadString(data, ref offset);
+        if (!address.StartsWith('/') || !tags.StartsWith(',')) throw new FormatException("Invalid OSC address or tags.");
+        var args = new List<object>(tags.Length - 1);
+        foreach (char tag in tags.AsSpan(1))
         {
-            char tag = typeTags[i + 1];
-
             switch (tag)
             {
-                case 'i':
-                    arguments.Add(DecodeInt(data, ref offset));
-                    break;
-                case 'f':
-                    arguments.Add(DecodeFloat(data, ref offset));
-                    break;
-                case 's':
-                    arguments.Add(DecodeString(data, ref offset));
-                    break;
+                case 'i': Require(data, offset, 4); args.Add(BinaryPrimitives.ReadInt32BigEndian(data.AsSpan(offset, 4))); offset += 4; break;
+                case 'f': Require(data, offset, 4); args.Add(BinaryPrimitives.ReadSingleBigEndian(data.AsSpan(offset, 4))); offset += 4; break;
+                case 's': args.Add(ReadString(data, ref offset)); break;
                 case 'b':
-                    arguments.Add(DecodeBlob(data, ref offset));
-                    break;
-                default:
-                    throw new NotSupportedException($"Unsupported type tag: '{tag}'");
+                    Require(data, offset, 4);
+                    int length = BinaryPrimitives.ReadInt32BigEndian(data.AsSpan(offset, 4)); offset += 4;
+                    Require(data, offset, length);
+                    int padded = Padded(length); Require(data, offset, padded);
+                    args.Add(data.AsSpan(offset, length).ToArray()); offset += padded; break;
+                default: throw new NotSupportedException($"Unsupported OSC tag: {tag}");
             }
         }
-
-        return new OscMessage(address, typeTags, arguments);
+        return new OscMessage(address, tags, args);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // Private methods: encoding
-    // ─────────────────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Encodes a string as ASCII bytes, null-terminated and padded to a multiple of 4.
-    /// </summary>
-    private byte[] EncodeString(string s)
+    private static void Require(byte[] data, int offset, int length)
     {
-        // ASCII because OSC requires it (and because M32 addresses are pure ASCII:
-        // slashes, digits and standard letters).
-        byte[] ascii = Encoding.ASCII.GetBytes(s);
-
-        // Final length with the null terminator, padded to a multiple of 4.
-        int totalLength = ascii.Length + 1;                       // +1 for the trailing 0x00
-        int paddedLength = ((totalLength + 3) / 4) * 4;           // round up to a multiple of 4
-
-        byte[] result = new byte[paddedLength];
-        Array.Copy(ascii, result, ascii.Length);                  // ASCII bytes first
-        // The remaining bytes are already 0 in C#: the null terminator and the
-        // padding appear automatically when the array is initialized.
-
-        return result;
+        if (offset < 0 || length < 0 || length > data.Length - offset) throw new FormatException("Truncated OSC packet.");
     }
-
-    /// <summary>
-    /// Encodes a 32-bit int as big-endian (4 bytes).
-    /// </summary>
-    private byte[] EncodeInt(int i)
+    private static string ReadString(byte[] data, ref int offset)
     {
-        byte[] bytes = BitConverter.GetBytes(i);
-
-        if (BitConverter.IsLittleEndian)
-        {
-            Array.Reverse(bytes);
-        }
-
-        return bytes;
-    }
-
-    /// <summary>
-    /// Encodes a 32-bit float as IEEE 754 big-endian (4 bytes).
-    /// </summary>
-    private byte[] EncodeFloat(float f)
-    {
-        byte[] bytes = BitConverter.GetBytes(f);
-
-        if (BitConverter.IsLittleEndian)
-        {
-            Array.Reverse(bytes);
-        }
-
-        return bytes;
-    }
-
-    /// <summary>
-    /// Encodes a byte blob: 4-byte big-endian length followed by the content,
-    /// padded to a multiple of 4.
-    /// </summary>
-    private byte[] EncodeBlob(byte[] blob)
-    {
-        byte[] lengthBytes = EncodeInt(blob.Length);
-        int paddedDataLength = ((blob.Length + 3) / 4) * 4;
-
-        byte[] result = new byte[4 + paddedDataLength];
-        Array.Copy(lengthBytes, 0, result, 0, 4);
-        Array.Copy(blob, 0, result, 4, blob.Length);
-        // The trailing padding is already 0 by default.
-
-        return result;
-    }
-
-    // ─────────────────────────────────────────────────────────────────────
-    // Private methods: decoding
-    // ─────────────────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Reads a null-terminated ASCII string from the given position and advances
-    /// the cursor to the next multiple of 4.
-    /// </summary>
-    private static string DecodeString(byte[] data, ref int offset)
-    {
-        // Find the first 0x00 byte from the current offset.
-        int end = offset;
-
-        while (end < data.Length && data[end] != 0)
-        {
-            end++;
-        }
-
-        string result = Encoding.ASCII.GetString(data, offset, end - offset);
-
-        // Advance the cursor: count the null terminator and jump to the next
-        // multiple of 4.
-        int consumed = end - offset + 1;                      // +1 for the 0x00
-        int padded = ((consumed + 3) / 4) * 4;
+        Require(data, offset, 1);
+        int end = Array.IndexOf(data, (byte)0, offset);
+        if (end < 0) throw new FormatException("Unterminated OSC string.");
+        int length = end - offset;
+        int padded = Padded(length + 1); Require(data, offset, padded);
+        string text = Encoding.ASCII.GetString(data, offset, length);
         offset += padded;
-
-        return result;
-    }
-
-    /// <summary>
-    /// Reads a 32-bit big-endian int and advances the cursor 4 bytes.
-    /// </summary>
-    private static int DecodeInt(byte[] data, ref int offset)
-    {
-        // Guard against a truncated packet: never read past the buffer. The blob
-        // path has its own length guard; scalars need the same protection.
-        if (offset < 0 || offset > data.Length - 4)
-        {
-            throw new FormatException("OSC int field extends past the received data.");
-        }
-
-        byte[] slice = new byte[4];
-        Array.Copy(data, offset, slice, 0, 4);
-
-        if (BitConverter.IsLittleEndian)
-        {
-            Array.Reverse(slice);
-        }
-
-        offset += 4;
-        return BitConverter.ToInt32(slice, 0);
-    }
-
-    /// <summary>
-    /// Reads a 32-bit big-endian float and advances the cursor 4 bytes.
-    /// </summary>
-    private static float DecodeFloat(byte[] data, ref int offset)
-    {
-        // Guard against a truncated packet: never read past the buffer. The blob
-        // path has its own length guard; scalars need the same protection.
-        if (offset < 0 || offset > data.Length - 4)
-        {
-            throw new FormatException("OSC float field extends past the received data.");
-        }
-
-        byte[] slice = new byte[4];
-        Array.Copy(data, offset, slice, 0, 4);
-
-        if (BitConverter.IsLittleEndian)
-        {
-            Array.Reverse(slice);
-        }
-
-        offset += 4;
-        return BitConverter.ToSingle(slice, 0);
-    }
-
-    /// <summary>
-    /// Reads a blob: 4-byte big-endian length followed by the content bytes.
-    /// Advances the cursor past the trailing padding too.
-    /// </summary>
-    private static byte[] DecodeBlob(byte[] data, ref int offset)
-    {
-        int length = DecodeInt(data, ref offset);
-
-        // Guard against a corrupt length: never allocate based on an unvalidated
-        // integer from the packet. Compared as "length > data.Length - offset"
-        // (not "offset + length > data.Length") so a huge length cannot overflow
-        // the addition and slip past into a multi-gigabyte allocation.
-        if (length < 0 || length > data.Length - offset)
-        {
-            throw new FormatException("OSC blob length exceeds the received data.");
-        }
-
-        byte[] blob = new byte[length];
-        Array.Copy(data, offset, blob, 0, length);
-
-        int paddedLength = ((length + 3) / 4) * 4;
-        offset += paddedLength;
-
-        return blob;
+        return text;
     }
 }

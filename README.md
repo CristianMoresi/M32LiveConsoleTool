@@ -28,7 +28,7 @@ target level; the app compares its moving average against that target and moves 
 fader to hold it there — if the level drifts above the target it lowers the fader, if
 it drifts below it raises it. The correction speed is configurable, with separate up
 and down rates, and the moves are slew-rate-limited so they are gradual rather than
-sudden. It runs on all watched channels and buses at once.
+sudden. Each watched channel and bus can opt into leveling independently and has its own maximum fader level.
 
 It does nothing while a channel is muted or below a silence gate, ignores large drops
 (an intentional cut, not drift), and stands down as soon as the engineer moves that
@@ -44,7 +44,13 @@ it reduces the gain at the source feeding that channel — the local head amp or
 AES50 stage box — so the channel stops clipping. The reduction is larger the further
 the peak went over the threshold, and is applied on the console's own gain grid
 (0.5 dB head amp steps, 0.25 dB trim steps). It only attenuates; it never raises the
-gain back on its own. If the gain is already at its physical minimum and the channel
+gain back on its own. It waits for confirmed routing, gain and mute state, follows
+digital trim as well as analog head amps, and shares gain state and cooldown across
+channels fed by the same physical preamp. A configurable accumulated-reduction limit
+(default 24 dB) bounds each resource; the strictest limit of its watched channels wins.
+The reduction counter starts again when the session is resynchronized or the routing,
+connection or device configuration is reset; it is not a lifetime attenuation budget.
+If the gain is already at its physical minimum and the channel
 still clips, it raises a single clear warning — manual action required — instead of
 logging reductions that no longer reduce anything.
 
@@ -54,7 +60,10 @@ It detects the tempo (from a click track, a percussive channel, or manual tap te
 and sets the console's delay slots to a chosen rhythmic figure — a dotted eighth, for
 example — recomputing the time whenever the tempo changes. It first asks the console
 which effect each FX slot holds, so it writes the time to that effect's correct
-parameter, and it leaves slots set to a fixed manual time untouched.
+parameter. Manual slots keep their configured fixed time. Unknown, unsupported or
+stale effect identities suspend writes. Automatic times require tempo evidence from
+the last four seconds; old tempos remain visible but are not used to configure a new
+slot. Effective times are deduplicated, and unconfirmed writes are retried.
 
 ### Supporting pieces
 
@@ -99,8 +108,16 @@ Program.cs       Entry point and ordered startup/shutdown
 
 The domain layer never touches the network: modules own the OSC client and decide
 when to send. Concurrency uses a copy-on-write pattern for the hot device lists
-and lock-guarded snapshots for the meter history, so the OSC receive thread and
-the module worker threads never block each other on the critical path.
+and a bounded history with sequence numbers. Averages read the retained samples
+without allocating a history copy. Clip and transient detection consume every new
+sample, including peaks that arrive between worker polls.
+
+Observed state and outgoing control decisions share a short critical section in the
+OSC transport. This makes panic and connection changes atomic with respect to writes.
+Changing peer or receiving routing/scene notifications invalidates observed state;
+periodic queries recover lost replies. Only the selected IPv4 address and source port
+can supply feedback. Queries continue while control is released. Disk logging uses a
+bounded background queue so file I/O does not hold the control or dashboard locks.
 
 ## Download
 
@@ -132,7 +149,7 @@ Each release also ships a `SHA256SUMS.txt` you can check your download against.
   executable. Download, extract and run.
 - To build from source: the [.NET 10 SDK](https://dotnet.microsoft.com/).
 - For real hardware: an M32/X32 reachable on the local network, with OSC enabled
-  on the standard ports (10023 send, 10024 receive).
+  on the standard ports (10023 send, 10024 receive), using an IPv4 literal.
 - Works on Windows, macOS and Linux. On Windows 10+ the dashboard enables ANSI
   virtual-terminal processing automatically.
 
@@ -154,11 +171,12 @@ Answer `Y` to the simulation prompt and the app points its OSC client at a local
 `M32Simulator` instead of a real console. On a first run it skips the setup wizard
 and loads a small demo session (a few channels and buses), so the dashboard comes
 up populated right away. The simulator answers subscriptions, streams synthetic
-meters, and reflects fader writes back into its meters — so you can watch the
-AutoLeveler converge in real time. It also models the channel head amp gain and
-injects a short clip excursion into the post-trim every few seconds, so the clip
-protection engages and you can watch its reductions tame the level. It still does
-not model the gate or compressor.
+meters, and models a common input → gain/trim → fader signal chain. Gain reductions
+therefore affect both post-trim and post-fader meters. Routing, shared head amps,
+digital trim, mute, gain quantization, FX parameter storage and subscription expiry
+are modeled. Tests can use a fixed input and drop selected replies deliberately.
+The interactive demo adds periodic clip excursions. Gates and compressors remain
+outside the simulator model.
 
 ## Using the dashboard
 
@@ -166,7 +184,7 @@ The screen shows a live dashboard with a one-line menu at the bottom:
 
 ```
 M32 Live Console Tool   [SIMULATION]
-  Time: 21:45:03   Up: 00:42:15   Mixer: 127.0.0.1 (simulated)  [receiving meters]
+  Time: 21:45:03   Up: 00:42:15   Mixer: 127.0.0.1 (simulated)  [LIVE]
   AutoLeveler [ON]   Anti-Clip [ON]  BpmDetector [ON]    BPM: 128.0
 
 Watched channels and buses:
@@ -184,7 +202,7 @@ Configured delay slots:
    2    3-Tap Delay         Manual      Manual                 80ms
 
 [A]uto-level Anti-[C]lip [B]PM [D]elay [X]clear-slot [F]x-refresh [T]ap [R]ecalibrate
-[N]channels [P]references [S]ave [L]oad [0]release-all [Q]uit
+[N]channels [P]references [S]ave [L]oad [0]release-all [F12]PANIC [Q]uit
 ```
 
 The menu legend at the bottom wraps to as many rows as the window width needs, so it
@@ -197,15 +215,24 @@ Rows are colored by what the tool is doing to each channel (amber = manual overr
 cyan = auto-leveling, red = clip protection just acted) and the level bar by how
 close it is to clipping (green/amber/red). Press the bracketed key to toggle a
 module, configure a delay slot, re-detect the effects loaded in the FX slots, tap
-tempo, recalibrate targets, manage channels, save/load presets, or `[0]` to release
-all automatic control at once. Each module's submenu also edits its parameters live
+tempo, recalibrate targets, manage channels or save/load presets. **F12 releases
+control from every submenu, text field, notice and timed capture**, and cancels the
+current form. `[0]` remains a shortcut on the main menu. Enabling a module explicitly
+rearms it; re-enabling only the leveler does not rearm delays after panic. Each module's submenu also edits its parameters live
 (the leveler's up/down speed has presets), with no need to touch the config file.
+Use `[N]` → `[E]` to edit a device's target, leveling/protection participation,
+maximum fader and gain-reduction budget; the screen lists channels sharing its gain.
+The header shows `LIVE`, `SYNC`, `NO SIGNAL` or `RELEASED`; `?` in a row means state
+is still unknown, `S` means stale meters and `-` means leveling is excluded.
+Preferences → `[V]` shows traffic, rejected packets, failed sends and log drops.
+
 The BPM submenu includes a figure-times table — every rhythmic figure converted to
 milliseconds at the current tempo, with values beyond the console's 3000 ms cap
 marked. The channel marked `*` is the one the BPM detector reads its tempo from.
 Every input flow can be cancelled with `Esc` and every notice is dismissed with a
 key press, at your own pace. The session is saved automatically on exit (including
-Ctrl+C and window close).
+Ctrl+C and window close). A failed save is reported as a failure, without announcing
+that the session was saved.
 
 ## Persistence
 
@@ -219,6 +246,13 @@ Files live in the standard per-user application-data folder
 - `presets/` — named configurations.
 - `logs/` — one dated event-log file per run (e.g. `2026-05-29_21-45-03.log`);
   the most recent 50 are kept and older ones are pruned automatically.
+
+Presets show a summary of changes before application. They apply their exact module
+flags, meter window, device options and delay slots while preserving the venue's
+network settings. Files are written to a temporary sibling, flushed and replaced
+atomically. Null collections, invalid entries and non-finite parameters are repaired
+or rejected before affecting runtime state. Simulation never replaces the saved real
+session.
 
 ## Testing
 
@@ -237,14 +271,40 @@ target re-capture after a manual move, the session/preset persistence round-trip
 the preset-name validation, and an end-to-end test of the control loop and effect
 detection against the simulator.
 
-Every pull request and branch push runs the suite in CI; releases run it again
-before publishing.
+Every pull request and branch push runs the suite on Windows, Linux and macOS.
+Release builds wait for the same matrix. CI retains TRX and coverage artifacts and
+smoke-tests a native self-contained executable on each runner. `global.json` stays
+on stable .NET 10 feature bands; dependency and bundled-runtime updates should run
+this matrix before release.
+
+The current source also includes a non-interactive, loopback-only diagnostic:
+
+```bash
+dotnet run -c Release -- --self-test       # 48 devices, synchronization and panic check
+dotnet run -c Release -- --self-test 1800  # 30-minute load profile, JSON metrics
+```
+
+A portable executable built from this source accepts the same arguments. The command
+returns a nonzero exit code when synchronization or panic validation fails. It does
+not load your session or contact a physical console. The audit's matched microbenchmark
+is available with `dotnet run --project tests/audit-2026-10-16/AuditProbe.csproj -c Release -- --benchmark`.
+
+See the [original audit](output/auditoria-m32-2026-10-16.markdown) and
+[correction record](output/correcciones-m32-2026-10-16.markdown) for findings,
+regressions, measurements and remaining hardware checks.
 
 ## Known limitations
 
-- The simulator models the fader, the head amp gain and a periodic clip excursion
-  (enough to exercise leveling, clip protection and the UI), but not the gate or
-  compressor, so those two are not exercised in simulation.
+- Clip protection reacts to metering and OSC feedback; it is not an audio limiter
+  and cannot prevent every transient before it occurs.
+- Loopback tests do not validate a particular M32/X32 firmware, AES50 stage box,
+  DCA/mute group or stereo-link configuration. Those combinations still need a
+  supervised hardware session and captured OSC traces.
+- OSC does not carry command acknowledgements with unique IDs. Feedback matching
+  uses bounded history and state queries; a physical move identical to a recent
+  command cannot always be distinguished from its echo.
+- The simulator does not model gates, compressors, DCA/mute groups or every routing
+  feature of a physical desk. Profiling excludes dashboard rendering and disk logging.
 
 ## License
 

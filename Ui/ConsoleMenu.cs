@@ -50,11 +50,12 @@ public class ConsoleMenu
     /// </summary>
     private const string MainMenuLegend =
         "[A]uto-level Anti-[C]lip [B]PM [D]elay [X]clear-slot [F]x-refresh [T]ap " +
-        "[R]ecalibrate [N]channels [P]references [S]ave [L]oad [0]release-all [Q]uit";
+        "[R]ecalibrate [N]channels [P]references [S]ave [L]oad [0]release-all [F12]PANIC [Q]uit";
 
     private AppOrchestrator orchestrator;
     private ConsoleDashboard dashboard;
     private bool shouldExit;
+    private readonly OperatorInput input;
 
     // ─────────────────────────────────────────────────────────────────────
     // Constructor
@@ -70,6 +71,7 @@ public class ConsoleMenu
         this.orchestrator = orchestrator;
         this.dashboard = dashboard;
         this.shouldExit = false;
+        input = new OperatorInput(orchestrator.ReleaseAll);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -85,7 +87,7 @@ public class ConsoleMenu
         while (!shouldExit)
         {
             ShowMainPrompt();
-            ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+            ConsoleKeyInfo key = input.ReadKey();
             HandleMainKey(key);
         }
     }
@@ -158,7 +160,7 @@ public class ConsoleMenu
                 "  [Esc] Back"
             });
 
-            ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+            ConsoleKeyInfo key = input.ReadKey();
             if (key.Key == ConsoleKey.Escape) return;
             switch (char.ToUpperInvariant(key.KeyChar))
             {
@@ -194,7 +196,7 @@ public class ConsoleMenu
                 "  [Esc] Back"
             });
 
-            ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+            ConsoleKeyInfo key = input.ReadKey();
             if (key.Key == ConsoleKey.Escape) return;
 
             switch (key.KeyChar)
@@ -243,7 +245,7 @@ public class ConsoleMenu
                 "  [Esc] Back"
             });
 
-            ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+            ConsoleKeyInfo key = input.ReadKey();
             if (key.Key == ConsoleKey.Escape) return;
 
             switch (key.KeyChar)
@@ -295,7 +297,7 @@ public class ConsoleMenu
                 "  [Esc] Back"
             });
 
-            ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+            ConsoleKeyInfo key = input.ReadKey();
             if (key.Key == ConsoleKey.Escape) return;
             switch (char.ToUpperInvariant(key.KeyChar))
             {
@@ -324,7 +326,7 @@ public class ConsoleMenu
                 "  [Esc] Back"
             });
 
-            ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+            ConsoleKeyInfo key = input.ReadKey();
             if (key.Key == ConsoleKey.Escape) return;
 
             switch (key.KeyChar)
@@ -390,7 +392,7 @@ public class ConsoleMenu
                 "  [Esc] Back"
             });
 
-            ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+            ConsoleKeyInfo key = input.ReadKey();
             if (key.Key == ConsoleKey.Escape) return;
 
             switch (char.ToUpperInvariant(key.KeyChar))
@@ -455,7 +457,7 @@ public class ConsoleMenu
             "  [Esc] Cancel"
         });
 
-        ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+        ConsoleKeyInfo key = input.ReadKey();
         if (key.Key == ConsoleKey.Escape) return;
 
         BpmDetectionMode? newMode = key.KeyChar switch
@@ -486,7 +488,7 @@ public class ConsoleMenu
                 "  [Esc] Back"
             });
 
-            ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+            ConsoleKeyInfo key = input.ReadKey();
             if (key.Key == ConsoleKey.Escape) return;
 
             switch (key.KeyChar)
@@ -525,6 +527,7 @@ public class ConsoleMenu
         if (channel == null)
         {
             string? name = AskString($"Name for channel {oscNumber.Value} [Channel {oscNumber.Value}]:");
+            if (name == null) return;
             if (string.IsNullOrWhiteSpace(name))
             {
                 name = $"Channel {oscNumber.Value}";
@@ -563,10 +566,10 @@ public class ConsoleMenu
                 $"  Send port: {orchestrator.Config.MixerSendPort}   Receive port: {orchestrator.Config.MixerReceivePort}",
                 $"  Data folder: {AppPaths.AppDirectory}",
                 "",
-                "  [I] Change IP   [O] Open folder   [N] New session (clear all)   [Esc] Back"
+                "  [I] Change IP   [O] Open folder   [N] New session   [V] Diagnostics   [Esc] Back"
             });
 
-            ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+            ConsoleKeyInfo key = input.ReadKey();
             if (key.Key == ConsoleKey.Escape) return;
 
             switch (char.ToUpperInvariant(key.KeyChar))
@@ -590,6 +593,13 @@ public class ConsoleMenu
                     ShowNotice(opened
                         ? "Folder opened in the file explorer."
                         : "Could not open the folder on this system.");
+                    break;
+                case 'V':
+                    ShowNotice(
+                        $"Link: {orchestrator.OscClient.ReceivedCount} received, {orchestrator.OscClient.SentCount} sent",
+                        $"Rejected packets: {orchestrator.OscClient.RejectedCount}; send failures: {orchestrator.OscClient.SendFailureCount}",
+                        $"Control writes: {orchestrator.OscClient.ControlSentCount}; released: {orchestrator.OscClient.WritesInhibited}",
+                        $"Log drops: {orchestrator.Logger.DroppedEvents}; disk: {orchestrator.Logger.DiskError ?? "OK"}");
                     break;
                 case 'N':
                     AskResetSession();
@@ -620,7 +630,7 @@ public class ConsoleMenu
             "  [Y] Yes, start fresh   [N] No, cancel"
         });
 
-        ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+        ConsoleKeyInfo key = input.ReadKey();
         if (key.Key == ConsoleKey.Escape) return;
         if (char.ToUpperInvariant(key.KeyChar) != 'Y') return;
 
@@ -650,11 +660,11 @@ public class ConsoleMenu
                 "Watched channels and buses",
                 "",
                 "  [A] Add channel     [B] Add bus",
-                "  [R] Rename          [X] Remove",
+                "  [R] Rename          [X] Remove     [E] Control and limits",
                 "  [Esc] Back"
             });
 
-            ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+            ConsoleKeyInfo key = input.ReadKey();
             if (key.Key == ConsoleKey.Escape) return;
 
             switch (char.ToUpperInvariant(key.KeyChar))
@@ -663,6 +673,7 @@ public class ConsoleMenu
                 case 'B': AddBusFlow(); break;
                 case 'R': RenameDeviceFlow(); break;
                 case 'X': RemoveDeviceFlow(); break;
+                case 'E': EditDeviceFlow(); break;
             }
         }
         finally
@@ -675,12 +686,58 @@ public class ConsoleMenu
     /// Add-channel flow: asks for a number (1-32) and a name. If the name is left
     /// empty, "Channel N" is used by default.
     /// </summary>
+    private void EditDeviceFlow()
+    {
+        PaintSubmenu(new[] { "Control and limits", "[C] Channel  [B] Bus  [Esc] Cancel" });
+        var key = input.ReadKey();
+        bool bus = char.ToUpperInvariant(key.KeyChar) == 'B';
+        if (!bus && char.ToUpperInvariant(key.KeyChar) != 'C') return;
+        int? number = AskInt("Device number:", 1, bus ? 16 : 32);
+        if (number == null) return;
+        var device = orchestrator.MeterReader.Devices.FirstOrDefault(d => d.OscNumber == number && (d is Bus) == bus);
+        if (device == null) { ShowNotice("Device is not watched."); return; }
+        while (true)
+        {
+            PaintSubmenu(new[] {
+                $"{device.Name}: control and limits",
+                $"[A] Level: {device.AutoLevelEnabled}   [C] Protection: {device.ProtectionEnabled}",
+                $"[T] Target: {device.TargetLevelDb:F1} dBFS   [F] Max fader: {device.MaxFaderDb:F1} dB",
+                $"[G] Maximum accumulated gain reduction: {device.MaxGainReductionDb:F1} dB",
+                device is MixerChannel channel && channel.HeadAmpResolved
+                    ? "Gain shared with: " + string.Join(", ", orchestrator.MeterReader.Devices.OfType<MixerChannel>().Where(c => ReferenceEquals(c.Gain, channel.Gain)).Select(c => $"#{c.OscNumber} {c.Name}"))
+                    : "",
+                "[Esc] Back   [F12] PANIC"
+            });
+            key = input.ReadKey();
+            if (key.Key == ConsoleKey.Escape) return;
+            double? value;
+            switch (char.ToUpperInvariant(key.KeyChar))
+            {
+                case 'A': lock (orchestrator.OscClient.ControlLock) device.AutoLevelEnabled = !device.AutoLevelEnabled; break;
+                case 'C': lock (orchestrator.OscClient.ControlLock) device.ProtectionEnabled = !device.ProtectionEnabled; break;
+                case 'T':
+                    value = AskDouble("Target (-90 to 10 dBFS):", -90, 10);
+                    if (value.HasValue) device.TargetLevelDb = value.Value;
+                    break;
+                case 'F':
+                    value = AskDouble("Maximum fader (-90 to 10 dB):", -90, 10);
+                    if (value.HasValue) device.MaxFaderDb = value.Value;
+                    break;
+                case 'G':
+                    value = AskDouble("Maximum total gain reduction (0 to 72 dB):", 0, 72);
+                    if (value.HasValue) device.MaxGainReductionDb = value.Value;
+                    break;
+            }
+        }
+    }
+
     private void AddChannelFlow()
     {
         int? num = AskInt("Channel number (1-32), Esc to cancel:", 1, 32);
         if (!num.HasValue) return;
 
         string? name = AskString($"Name for channel {num.Value} [Channel {num.Value}]:");
+        if (name == null) return;
         if (string.IsNullOrWhiteSpace(name))
         {
             name = $"Channel {num.Value}";
@@ -703,6 +760,7 @@ public class ConsoleMenu
         if (!num.HasValue) return;
 
         string? name = AskString($"Name for bus {num.Value} [Bus {num.Value}]:");
+        if (name == null) return;
         if (string.IsNullOrWhiteSpace(name))
         {
             name = $"Bus {num.Value}";
@@ -728,7 +786,7 @@ public class ConsoleMenu
             "  [C] Channel   [B] Bus   [Esc] Cancel"
         });
 
-        ConsoleKeyInfo typeKey = Console.ReadKey(intercept: true);
+        ConsoleKeyInfo typeKey = input.ReadKey();
         if (typeKey.Key == ConsoleKey.Escape) return;
 
         char typeChar = char.ToUpperInvariant(typeKey.KeyChar);
@@ -765,7 +823,7 @@ public class ConsoleMenu
             "  [C] Channel   [B] Bus   [Esc] Cancel"
         });
 
-        ConsoleKeyInfo typeKey = Console.ReadKey(intercept: true);
+        ConsoleKeyInfo typeKey = input.ReadKey();
         if (typeKey.Key == ConsoleKey.Escape) return;
 
         char typeChar = char.ToUpperInvariant(typeKey.KeyChar);
@@ -838,7 +896,7 @@ public class ConsoleMenu
                 "  [Esc] Cancel"
             });
 
-            ConsoleKeyInfo modeKey = Console.ReadKey(intercept: true);
+            ConsoleKeyInfo modeKey = input.ReadKey();
             if (modeKey.Key == ConsoleKey.Escape) return;
 
             char modeChar = char.ToUpperInvariant(modeKey.KeyChar);
@@ -899,7 +957,7 @@ public class ConsoleMenu
             "  [7] Modulation Delay     [Esc] Cancel"
         });
 
-        ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+        ConsoleKeyInfo key = input.ReadKey();
         if (key.Key == ConsoleKey.Escape) return null;
 
         return key.KeyChar switch
@@ -930,7 +988,7 @@ public class ConsoleMenu
             "  [Esc] Cancel"
         });
 
-        ConsoleKeyInfo familyKey = Console.ReadKey(intercept: true);
+        ConsoleKeyInfo familyKey = input.ReadKey();
         if (familyKey.Key == ConsoleKey.Escape) return null;
 
         switch (familyKey.KeyChar)
@@ -958,7 +1016,7 @@ public class ConsoleMenu
             "  [Esc] Cancel"
         });
 
-        ConsoleKeyInfo varKey = Console.ReadKey(intercept: true);
+        ConsoleKeyInfo varKey = input.ReadKey();
         if (varKey.Key == ConsoleKey.Escape) return null;
 
         switch (char.ToUpperInvariant(varKey.KeyChar))
@@ -1002,7 +1060,12 @@ public class ConsoleMenu
         {
             orchestrator.RefreshEffects();
             // Give the console a moment to answer the /fx/N/type queries.
-            Thread.Sleep(500);
+            var wait = System.Diagnostics.Stopwatch.StartNew();
+            while (wait.ElapsedMilliseconds < 500)
+            {
+                if (Console.KeyAvailable && input.ReadKey().Key == ConsoleKey.Escape) return;
+                Thread.Sleep(10);
+            }
             ShowDetectedEffects();
         }
         finally
@@ -1092,7 +1155,14 @@ public class ConsoleMenu
                 "Recalibrating AutoLeveler targets...",
                 "  Wait 2 seconds without touching anything to capture levels."
             });
-            orchestrator.RecalibrateTargets();
+            var wait = System.Diagnostics.Stopwatch.StartNew();
+            while (wait.ElapsedMilliseconds < AutoLeveler.DEFAULT_TARGET_CAPTURE_MS)
+            {
+                if (Console.KeyAvailable && input.ReadKey().Key == ConsoleKey.Escape) return;
+                Thread.Sleep(10);
+            }
+            if (orchestrator.OscClient.WritesInhibited) return;
+            orchestrator.AutoLeveler.CaptureTargets(0);
             ShowNotice("Recalibration complete.");
         }
         finally
@@ -1138,12 +1208,25 @@ public class ConsoleMenu
         EnterSubmenu();
         try
         {
+            string available = Directory.Exists(AppPaths.PresetsDirectory)
+                ? string.Join(", ", Directory.EnumerateFiles(AppPaths.PresetsDirectory, "*.json").Select(Path.GetFileNameWithoutExtension))
+                : "(none)";
+            PaintSubmenu(new[] { "Available presets", available });
             string? name = AskString("Load preset. Name (no extension), Esc to cancel:");
             if (string.IsNullOrWhiteSpace(name)) return;
 
             try
             {
-                orchestrator.LoadPresetFrom(name.Trim());
+                var preview = AppOrchestrator.ReadSession(AppPaths.GetPresetPath(name.Trim()));
+                PaintSubmenu(new[] {
+                    $"Apply preset '{name.Trim()}'?",
+                    $"Devices: {orchestrator.MeterReader.Devices.Count} -> {preview.WatchedDevices.Count}; window: {orchestrator.MeterReader.WindowMs} -> {preview.MeterWindowMs} ms",
+                    $"Level: {orchestrator.AutoLeveler.IsEnabled} -> {preview.AutoLevelerEnabled}; clip: {orchestrator.AntiClipper.IsEnabled} -> {preview.AntiClipperEnabled}; BPM: {orchestrator.BpmDetector.IsEnabled} -> {preview.BpmDetectorEnabled}",
+                    $"Delay slots: {orchestrator.DelayController.DelaySlots.Count} -> {preview.DelaySlots.Count}. Network settings are kept.",
+                    "[Y] Apply   [Esc] Cancel   [F12] PANIC"
+                });
+                if (char.ToUpperInvariant(input.ReadKey().KeyChar) != 'Y') return;
+                orchestrator.ApplyLoadedConfig(preview);
                 ShowNotice($"Loaded preset '{name.Trim()}'.");
             }
             catch (Exception ex)
@@ -1174,7 +1257,7 @@ public class ConsoleMenu
                 "  [Y] Yes   [N] No"
             });
 
-            ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+            ConsoleKeyInfo key = input.ReadKey();
             if (key.Key == ConsoleKey.Escape) return;
             if (char.ToUpperInvariant(key.KeyChar) == 'Y')
             {
@@ -1255,7 +1338,7 @@ public class ConsoleMenu
         withPrompt[^2] = "";
         withPrompt[^1] = "  Press any key to continue...";
         PaintSubmenu(withPrompt);
-        Console.ReadKey(intercept: true);
+        input.ReadKey();
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -1288,7 +1371,7 @@ public class ConsoleMenu
             StringBuilder buffer = new StringBuilder();
             while (true)
             {
-                ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+                ConsoleKeyInfo key = input.ReadKey();
 
                 if (key.Key == ConsoleKey.Escape)
                 {

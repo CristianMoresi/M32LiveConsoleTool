@@ -64,8 +64,11 @@ public class AutoLeveler
     /// </summary>
     private const int STABILIZATION_AFTER_MANUAL_MS = 4000;
 
-    /// <summary>Sleep granularity inside the process loop.</summary>
-    private const int PROCESS_SLEEP_TICK_MS = 50;
+    /// <summary>Cancelable wait for the next control deadline.</summary>
+    private readonly ManualResetEventSlim stopSignal = new(false);
+    private readonly Dictionary<AudioDevice, double> pendingCorrection = new();
+    private readonly Dictionary<AudioDevice, long> previousCycle = new();
+    private long generation = -1;
 
     /// <summary>Default duration of the initial target capture (sound check).</summary>
     public const int DEFAULT_TARGET_CAPTURE_MS = 2000;
@@ -104,10 +107,10 @@ public class AutoLeveler
     /// Per-device manual-change state. A <c>ConcurrentDictionary</c> lets entries
     /// be added/removed while the process thread reads, with no external locks.
     /// </summary>
-    private ConcurrentDictionary<AudioDevice, DateTime?> manualChangeStateByDevice;
+    private ConcurrentDictionary<AudioDevice, long?> manualChangeStateByDevice;
 
-    /// <summary>UTC time of the last correction applied per device, for the dashboard state color.</summary>
-    private ConcurrentDictionary<AudioDevice, DateTime> lastCorrectionAtByDevice;
+    /// <summary>Monotonic timestamp of the last correction applied per device, for the dashboard state color.</summary>
+    private ConcurrentDictionary<AudioDevice, long> lastCorrectionAtByDevice;
 
     /// <summary>Fader position seen at the previous stabilization check, to detect an ongoing manual gesture.</summary>
     private ConcurrentDictionary<AudioDevice, float> faderAtStabilizationCheck;
@@ -147,13 +150,13 @@ public class AutoLeveler
         this.thresholdDb = thresholdDb;
         this.slewUpDbPerSec = slewUpDbPerSec;
         this.slewDownDbPerSec = slewDownDbPerSec;
-        this.gateThresholdDb = gateThresholdDb;
+        GateThresholdDb = gateThresholdDb;
         this.dropLimitDb = dropLimitDb;
         this.cycleIntervalMs = cycleIntervalMs;
         this.isEnabled = false;
         this.processThread = null;
-        this.manualChangeStateByDevice = new ConcurrentDictionary<AudioDevice, DateTime?>();
-        this.lastCorrectionAtByDevice = new ConcurrentDictionary<AudioDevice, DateTime>();
+        this.manualChangeStateByDevice = new ConcurrentDictionary<AudioDevice, long?>();
+        this.lastCorrectionAtByDevice = new ConcurrentDictionary<AudioDevice, long>();
         this.faderAtStabilizationCheck = new ConcurrentDictionary<AudioDevice, float>();
 
         foreach (AudioDevice device in devices)
@@ -202,7 +205,7 @@ public class AutoLeveler
     public double GateThresholdDb
     {
         get { return gateThresholdDb; }
-        set { gateThresholdDb = value; }
+        set { if (!double.IsFinite(value) || value < -90 || value > 0) throw new ArgumentOutOfRangeException(nameof(value)); gateThresholdDb = value; }
     }
 
     public double DropLimitDb
@@ -223,7 +226,7 @@ public class AutoLeveler
 
     private static void ValidateThreshold(double thresholdDb)
     {
-        if (thresholdDb <= 0)
+        if (!double.IsFinite(thresholdDb) || thresholdDb <= 0)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(thresholdDb),
@@ -233,7 +236,7 @@ public class AutoLeveler
 
     private static void ValidateSlew(double slewDbPerSec, string direction)
     {
-        if (slewDbPerSec <= 0)
+        if (!double.IsFinite(slewDbPerSec) || slewDbPerSec <= 0)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(slewDbPerSec),
@@ -243,7 +246,7 @@ public class AutoLeveler
 
     private static void ValidateDropLimit(double dropLimitDb)
     {
-        if (dropLimitDb <= 0)
+        if (!double.IsFinite(dropLimitDb) || dropLimitDb <= 0)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(dropLimitDb),
@@ -272,12 +275,12 @@ public class AutoLeveler
     /// </summary>
     public LevelingState GetDeviceState(AudioDevice device)
     {
-        if (manualChangeStateByDevice.TryGetValue(device, out DateTime? manualAt) && manualAt != null)
+        if (manualChangeStateByDevice.TryGetValue(device, out long? manualAt) && manualAt != null)
         {
             return LevelingState.ManualOverride;
         }
-        if (lastCorrectionAtByDevice.TryGetValue(device, out DateTime last)
-            && (DateTime.UtcNow - last).TotalMilliseconds < CORRECTION_HIGHLIGHT_MS)
+        if (lastCorrectionAtByDevice.TryGetValue(device, out long last)
+            && oscClient.Clock.GetElapsedTime(last).TotalMilliseconds < CORRECTION_HIGHLIGHT_MS)
         {
             return LevelingState.Correcting;
         }
@@ -355,7 +358,7 @@ public class AutoLeveler
             // Never capture a target from silence: it would set the target to the
             // -90 dB floor and make the leveler pull the fader all the way down when
             // the signal returns. Keep the previous target for a silent device.
-            if (average < gateThresholdDb)
+            if (!device.ReadyForLeveling || !double.IsFinite(average) || average < gateThresholdDb)
             {
                 keptSilent++;
                 continue;
@@ -381,6 +384,7 @@ public class AutoLeveler
             return;
         }
 
+        stopSignal.Reset();
         isEnabled = true;
 
         processThread = new Thread(ProcessLoop);
@@ -399,6 +403,7 @@ public class AutoLeveler
         }
 
         isEnabled = false;
+        stopSignal.Set();
 
         if (processThread != null && processThread.IsAlive)
         {
@@ -417,120 +422,78 @@ public class AutoLeveler
     {
         while (isEnabled)
         {
-            try
-            {
-                // Atomic snapshot: if the list changes mid-iteration, this cycle
-                // finishes on the old version and the next one sees the new list.
-                List<AudioDevice> snapshot = devices;
-
-                foreach (AudioDevice device in snapshot)
-                {
-                    ProcessDevice(device);
-                }
-            }
-            catch (Exception ex)
-            {
-                // A correction must never kill the module mid-show: log (throttled)
-                // and keep running.
-                LogProcessErrorThrottled(ex);
-            }
-
-            int slept = 0;
-            while (slept < cycleIntervalMs && isEnabled)
-            {
-                Thread.Sleep(PROCESS_SLEEP_TICK_MS);
-                slept += PROCESS_SLEEP_TICK_MS;
-            }
+            long started = oscClient.Clock.GetTimestamp();
+            try { foreach (var device in devices) ProcessDevice(device); }
+            catch (Exception ex) { LogProcessErrorThrottled(ex); }
+            double elapsed = oscClient.Clock.GetElapsedTime(started).TotalMilliseconds;
+            if (stopSignal.Wait(Math.Max(1, cycleIntervalMs - (int)elapsed))) break;
         }
     }
 
-    private void ProcessDevice(AudioDevice device)
+    internal void ProcessDevice(AudioDevice device)
     {
-        // Guard 0: do nothing until the console has reported this device's real
-        // fader position. Acting from the placeholder 0.0 (which maps to -inf dB)
-        // would be meaningless and could never converge.
-        if (!device.FaderInitialized)
+        lock (oscClient.ControlLock)
         {
-            return;
+            if (generation != oscClient.Generation)
+            {
+                generation = oscClient.Generation;
+                pendingCorrection.Clear(); previousCycle.Clear();
+                foreach (var d in devices) manualChangeStateByDevice[d] = null;
+                lastCorrectionAtByDevice.Clear(); faderAtStabilizationCheck.Clear();
+            }
+            long now = oscClient.Clock.GetTimestamp();
+            double dt = previousCycle.TryGetValue(device, out long previous)
+                ? Math.Clamp(oscClient.Clock.GetElapsedTime(previous, now).TotalSeconds, 0, Math.Min(0.25, cycleIntervalMs / 1000.0 * 2))
+                : cycleIntervalMs / 1000.0;
+            previousCycle[device] = now;
+            device.ExpireUnconfirmedFader();
+            if (oscClient.WritesInhibited || !device.AutoLevelEnabled || !device.ReadyForLeveling || !devices.Contains(device))
+            {
+                pendingCorrection.Remove(device);
+                return;
+            }
+            if (HandleManualChangeStabilization(device)) { pendingCorrection.Remove(device); return; }
+            if (device.DetectManualChange())
+            {
+                manualChangeStateByDevice[device] = now;
+                faderAtStabilizationCheck[device] = device.CurrentFader;
+                pendingCorrection.Remove(device);
+                return;
+            }
+            double average = meterReader.GetMovingAverage(device);
+            double startDb = FaderMath.FaderToDb(device.LastSentFader);
+            double levelDifference = device.TargetLevelDb - average;
+            double difference = Math.Min(levelDifference, device.MaxFaderDb - startDb);
+            if (!double.IsFinite(average) || average < gateThresholdDb || difference > dropLimitDb
+                || (Math.Abs(levelDifference) < thresholdDb && startDb <= device.MaxFaderDb))
+            {
+                pendingCorrection.Remove(device);
+                return;
+            }
+            double step = CalculateCorrection(difference, (difference >= 0 ? slewUpDbPerSec : slewDownDbPerSec) * dt);
+            double pending = pendingCorrection.GetValueOrDefault(device);
+            if (Math.Sign(step) != Math.Sign(pending)) pending = 0;
+            pending += step;
+            // Accumulation must not pass the target or a ceiling closer than one send quantum.
+            pending = Math.CopySign(Math.Min(Math.Abs(pending), Math.Abs(difference)), pending);
+            float proposed = FaderMath.DbToFader(startDb + pending);
+            if (Math.Abs(proposed - device.LastSentFader) < AudioDevice.FADER_EPSILON)
+            {
+                pendingCorrection[device] = Math.Clamp(pending, -1, 1);
+                return;
+            }
+            if (oscClient.SendControl(new OscMessage(device.GetOscAddress(), ",f", new() { proposed })))
+            {
+                device.RecordFaderSent(proposed);
+                pendingCorrection.Remove(device);
+                lastCorrectionAtByDevice[device] = now;
+            }
         }
-
-        // Guard 1: mute.
-        if (device.IsMuted)
-        {
-            return;
-        }
-
-        // Guard 2: stabilization period after a manual change.
-        if (HandleManualChangeStabilization(device))
-        {
-            return;
-        }
-
-        // Guard 3: detect a new manual change.
-        if (device.DetectManualChange())
-        {
-            manualChangeStateByDevice[device] = DateTime.UtcNow;
-            faderAtStabilizationCheck[device] = device.CurrentFader;
-            return;
-        }
-
-        // Read the moving average.
-        double avgDb = meterReader.GetMovingAverage(device);
-
-        // Guard 4: silence gate.
-        if (avgDb < gateThresholdDb)
-        {
-            return;
-        }
-
-        double diffDb = device.TargetLevelDb - avgDb;
-
-        // Guard 5: drop limit (intentional cut).
-        if (diffDb > dropLimitDb)
-        {
-            return;
-        }
-
-        // Guard 6: action threshold.
-        if (Math.Abs(diffDb) < thresholdDb)
-        {
-            return;
-        }
-
-        // Compute the slew-rate-limited correction, using the upward rate when
-        // raising a low level and the downward rate when lowering a high one.
-        double slewDbPerSec = diffDb >= 0 ? slewUpDbPerSec : slewDownDbPerSec;
-        double maxStepDb = slewDbPerSec * (cycleIntervalMs / 1000.0);
-        double correctionDb = CalculateCorrection(diffDb, maxStepDb);
-
-        float faderBefore = device.LastSentFader;
-        device.ApplyCorrection(correctionDb);
-
-        // If the fader is pinned at a rail (for example already at the +10 dB
-        // maximum) the correction produces no actual movement; skip the redundant
-        // OSC write instead of resending the same value every cycle.
-        if (Math.Abs(device.LastSentFader - faderBefore) < AudioDevice.FADER_EPSILON)
-        {
-            return;
-        }
-
-        // Optimistically record our own write as the current position so the next
-        // cycle does not mistake it for a manual move before the console echoes
-        // the value back. A genuine manual move will overwrite this via the
-        // console's /xremote feedback.
-        device.CurrentFader = device.LastSentFader;
-
-        SendFaderUpdate(device);
-        lastCorrectionAtByDevice[device] = DateTime.UtcNow;
-
-        // Note: individual corrections are NOT logged, to avoid flooding the log
-        // with hundreds of entries per minute. Only management events are logged
-        // (enable, disable, recalibration, etc.).
     }
 
     private bool HandleManualChangeStabilization(AudioDevice device)
     {
-        if (!manualChangeStateByDevice.TryGetValue(device, out DateTime? manualChangeAt))
+        if (!manualChangeStateByDevice.TryGetValue(device, out long? manualChangeAt))
         {
             // The device was just removed: skip this cycle.
             return true;
@@ -547,13 +510,13 @@ public class AutoLeveler
         if (faderAtStabilizationCheck.TryGetValue(device, out float previous)
             && Math.Abs(current - previous) > AudioDevice.FADER_EPSILON)
         {
-            manualChangeStateByDevice[device] = DateTime.UtcNow;
+            manualChangeStateByDevice[device] = oscClient.Clock.GetTimestamp();
             faderAtStabilizationCheck[device] = current;
             return true;
         }
         faderAtStabilizationCheck[device] = current;
 
-        double elapsedMs = (DateTime.UtcNow - manualChangeAt.Value).TotalMilliseconds;
+        double elapsedMs = oscClient.Clock.GetElapsedTime(manualChangeAt.Value).TotalMilliseconds;
 
         if (elapsedMs < STABILIZATION_AFTER_MANUAL_MS)
         {
@@ -568,13 +531,13 @@ public class AutoLeveler
         double newTargetDb = meterReader.GetMovingAverage(device);
         if (newTargetDb < gateThresholdDb)
         {
-            manualChangeStateByDevice[device] = DateTime.UtcNow;
+            manualChangeStateByDevice[device] = oscClient.Clock.GetTimestamp();
             return true;
         }
 
         // The wait is over: re-capture the target and clear the state.
         device.TargetLevelDb = newTargetDb;
-        device.LastSentFader = device.CurrentFader;
+        device.AcknowledgeManualChange();
         manualChangeStateByDevice[device] = null;
 
         // Do not apply a correction this cycle: normal operation resumes next one.
@@ -588,15 +551,7 @@ public class AutoLeveler
         return Math.Sign(diffDb) * absStep;
     }
 
-    private void SendFaderUpdate(AudioDevice device)
-    {
-        OscMessage update = new OscMessage(
-            device.GetOscAddress(),
-            ",f",
-            new List<object> { device.LastSentFader });
 
-        oscClient.Send(update);
-    }
 
     /// <summary>Logs a process-loop error at most once every few seconds.</summary>
     private void LogProcessErrorThrottled(Exception ex)

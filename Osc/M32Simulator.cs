@@ -112,7 +112,32 @@ public class M32Simulator
     private IPEndPoint? lastSenderEndpoint;
 
     /// <summary>Simulator start time, the base for computing the sine phase.</summary>
-    private DateTime startTime;
+    private long startTime;
+    private readonly TimeProvider clock;
+    public int LocalPort => (listener?.Client.LocalEndPoint as IPEndPoint)?.Port ?? 0;
+    public bool IsRunning => isRunning;
+    public double? FixedInputDb { get; set; }
+    public bool ClipExcursionsEnabled { get; set; } = true;
+    public Func<OscMessage, bool>? ShouldDropReply { get; set; }
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<int, int> sources = new();
+
+    public float ReadParameter(string address) => GetFader(address);
+
+    public void SetChannelSource(int channel, int headAmp)
+    {
+        if (channel < 1 || channel > 32 || headAmp < -1 || headAmp > 127) throw new ArgumentOutOfRangeException(nameof(channel));
+        sources[channel] = headAmp;
+        SendReply(new OscMessage($"/ch/{channel:D2}/config/source", ",i", new() { headAmp + 1 }));
+    }
+
+    private void SendReply(OscMessage message)
+    {
+        var endpoint = lastSenderEndpoint;
+        if (endpoint == null || ShouldDropReply?.Invoke(message) == true) return;
+        byte[] bytes = message.Encode();
+        try { listener?.Send(bytes, bytes.Length, endpoint); }
+        catch (Exception ex) when (ex is SocketException or ObjectDisposedException) { }
+    }
 
     // ─────────────────────────────────────────────────────────────────────
     // Constructor
@@ -124,8 +149,9 @@ public class M32Simulator
     /// events (subscriptions, errors) with the same structure as the rest of the
     /// modules.
     /// </summary>
-    public M32Simulator(int listenPort, ShowLogger logger)
+    public M32Simulator(int listenPort, ShowLogger logger, TimeProvider? clock = null)
     {
+        this.clock = clock ?? TimeProvider.System;
         this.listenPort = listenPort;
         this.logger = logger;
         this.listener = null;
@@ -134,7 +160,7 @@ public class M32Simulator
         this.isRunning = false;
         this.subscriptions = new Dictionary<string, Subscription>();
         this.lastSenderEndpoint = null;
-        this.startTime = DateTime.UtcNow;
+        this.startTime = this.clock.GetTimestamp();
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -169,7 +195,7 @@ public class M32Simulator
             return;
         }
 
-        startTime = DateTime.UtcNow;
+        startTime = clock.GetTimestamp();
         isRunning = true;
 
         receiveThread = new Thread(ReceiveLoop);
@@ -280,8 +306,9 @@ public class M32Simulator
                 HandleUnsubscribe(message);
                 break;
             case "/renew":
-                // The simulator's subscriptions never expire, so /renew is a
-                // no-op. The real console would renew them.
+                if (message.Arguments.FirstOrDefault() is string alias)
+                    lock (subscriptionsLock)
+                        if (subscriptions.TryGetValue(alias, out var subscription)) subscription.RenewedAt = clock.GetTimestamp();
                 break;
             case "/xremote":
                 // On a real console this starts forwarding parameter changes to
@@ -291,6 +318,8 @@ public class M32Simulator
             default:
                 string addr = message.Address;
                 if (addr.EndsWith("/mix/fader", StringComparison.Ordinal)
+                    || addr.EndsWith("/preamp/trim", StringComparison.Ordinal)
+                    || (addr.StartsWith("/fx/", StringComparison.Ordinal) && addr.Contains("/par/", StringComparison.Ordinal))
                     || (addr.StartsWith("/headamp/", StringComparison.Ordinal)
                         && addr.EndsWith("/gain", StringComparison.Ordinal)))
                 {
@@ -336,7 +365,8 @@ public class M32Simulator
             Alias = alias,
             SourcePath = sourcePath,
             Param1 = param1,
-            Param2 = param2
+            Param2 = param2,
+            RenewedAt = clock.GetTimestamp()
         };
 
         lock (subscriptionsLock)
@@ -396,6 +426,18 @@ public class M32Simulator
         {
             lock (faderLock)
             {
+                if (!float.IsFinite(value)) return;
+                value = Math.Clamp(value, 0, 1);
+                if (address.StartsWith("/headamp/", StringComparison.Ordinal))
+                {
+                    double db = FaderMath.Denormalize(value, -12, 60);
+                    value = FaderMath.Normalize(Math.Round(db * 2) / 2, -12, 60);
+                }
+                else if (address.EndsWith("/preamp/trim", StringComparison.Ordinal))
+                {
+                    double db = FaderMath.Denormalize(value, -18, 18);
+                    value = FaderMath.Normalize(Math.Round(db * 4) / 4, -18, 18);
+                }
                 faderByAddress[address] = value;
             }
             SendFaderReply(address, value);
@@ -435,6 +477,8 @@ public class M32Simulator
         {
             return FaderMath.Normalize(0.0, M32Buckets.HEAD_AMP_GAIN_MIN_DB, M32Buckets.HEAD_AMP_GAIN_MAX_DB);
         }
+        if (address.EndsWith("/preamp/trim", StringComparison.Ordinal)) return 0.5f;
+        if (address.StartsWith("/fx/", StringComparison.Ordinal)) return 0f;
         return SIM_REFERENCE_FADER;
     }
 
@@ -447,11 +491,9 @@ public class M32Simulator
         }
 
         OscMessage reply = new OscMessage(address, ",f", new List<object> { value });
-        byte[] datagram = reply.Encode();
-
         try
         {
-            listener?.Send(datagram, datagram.Length, lastSenderEndpoint);
+            SendReply(reply);
         }
         catch
         {
@@ -487,12 +529,10 @@ public class M32Simulator
             return;
         }
 
-        OscMessage reply = new OscMessage(message.Address, ",i", new List<object> { inputIndex });
-        byte[] datagram = reply.Encode();
-
+        OscMessage reply = new OscMessage(message.Address, ",i", new List<object> { sources.GetValueOrDefault(inputIndex + 1, inputIndex) });
         try
         {
-            listener?.Send(datagram, datagram.Length, lastSenderEndpoint);
+            SendReply(reply);
         }
         catch
         {
@@ -531,11 +571,9 @@ public class M32Simulator
         }
 
         OscMessage reply = new OscMessage(message.Address, ",i", new List<object> { on });
-        byte[] datagram = reply.Encode();
-
         try
         {
-            listener?.Send(datagram, datagram.Length, lastSenderEndpoint);
+            SendReply(reply);
         }
         catch
         {
@@ -583,11 +621,9 @@ public class M32Simulator
         };
 
         OscMessage reply = new OscMessage(message.Address, ",i", new List<object> { typeIndex });
-        byte[] datagram = reply.Encode();
-
         try
         {
-            listener?.Send(datagram, datagram.Length, lastSenderEndpoint);
+            SendReply(reply);
         }
         catch
         {
@@ -614,6 +650,7 @@ public class M32Simulator
                 List<Subscription> snapshot;
                 lock (subscriptionsLock)
                 {
+                    foreach (string key in subscriptions.Where(x => clock.GetElapsedTime(x.Value.RenewedAt).TotalMilliseconds >= 10000).Select(x => x.Key).ToArray()) subscriptions.Remove(key);
                     snapshot = new List<Subscription>(subscriptions.Values);
                 }
 
@@ -631,9 +668,7 @@ public class M32Simulator
                         sub.Alias,
                         ",b",
                         new List<object> { blob });
-                    byte[] datagram = reply.Encode();
-
-                    listener?.Send(datagram, datagram.Length, lastSenderEndpoint);
+                    SendReply(reply);
                 }
             }
             catch
@@ -684,10 +719,10 @@ public class M32Simulator
         // its head amp reductions visibly bring the post-trim back down.
         double postTrimDb = inputDb + CurrentClipExcursionDb() + HeadAmpGainDb(userChannel);
 
-        // The post-fader value is shifted by this channel's current fader gain, so the
-        // AutoLeveler sees its own corrections take effect on the meter. It is kept
-        // independent of the clip excursion so the leveling demo stays clean.
-        double postFaderDb = inputDb + FaderGainDb(GetFader($"/ch/{userChannel:D2}/mix/fader"));
+        // Both meters follow the same gain stage, including clip excursions.
+        // This exposes the interaction between preamp protection and fader leveling.
+        double postFaderDb = postTrimDb + FaderGainDb(GetFader($"/ch/{userChannel:D2}/mix/fader"));
+        lock (muteLock) if (muteByAddress.GetValueOrDefault($"/ch/{userChannel:D2}/mix/on", 1) == 0) postFaderDb = -90;
 
         result[(int)ChannelStripFloat.PostTrim] = DbToLinear((float)postTrimDb);
         result[(int)ChannelStripFloat.GateGainReduction] = 0f;
@@ -729,7 +764,8 @@ public class M32Simulator
     /// </summary>
     private double CurrentSimulatedDb()
     {
-        double elapsed = (DateTime.UtcNow - startTime).TotalSeconds;
+        if (FixedInputDb is double value) return value;
+        double elapsed = clock.GetElapsedTime(startTime).TotalSeconds;
         double phase = (elapsed % SIM_PERIOD_SECONDS) / SIM_PERIOD_SECONDS;
         double angle = phase * 2.0 * Math.PI;
 
@@ -746,7 +782,8 @@ public class M32Simulator
     /// </summary>
     private double CurrentClipExcursionDb()
     {
-        double elapsed = (DateTime.UtcNow - startTime).TotalSeconds;
+        if (!ClipExcursionsEnabled) return 0;
+        double elapsed = clock.GetElapsedTime(startTime).TotalSeconds;
         double phase = elapsed % SIM_CLIP_PERIOD_SECONDS;
         return phase < SIM_CLIP_BURST_SECONDS ? SIM_CLIP_BURST_DB : 0.0;
     }
@@ -759,7 +796,9 @@ public class M32Simulator
     /// </summary>
     private double HeadAmpGainDb(int userChannel)
     {
-        string address = M32Buckets.BuildHeadAmpGainAddress(userChannel - 1);
+        int source = sources.GetValueOrDefault(userChannel, userChannel - 1);
+        if (source == -1) return FaderMath.Denormalize(GetFader(M32Buckets.BuildChannelTrimAddress(userChannel)), -18, 18);
+        string address = M32Buckets.BuildHeadAmpGainAddress(source);
         float normalized;
         lock (faderLock)
         {
@@ -810,6 +849,7 @@ public class M32Simulator
     /// </summary>
     private class Subscription
     {
+        public long RenewedAt { get; set; }
         public string Alias { get; set; } = "";
         public string SourcePath { get; set; } = "";
         public int Param1 { get; set; }

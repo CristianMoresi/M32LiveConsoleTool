@@ -59,6 +59,18 @@ internal static class Program
     /// </summary>
     public static void Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--self-test")
+        {
+            int seconds = 2;
+            if (args.Length > 2 || (args.Length == 2 && (!int.TryParse(args[1], out seconds) || seconds < 1 || seconds > 3600)))
+            {
+                Console.Error.WriteLine("Usage: --self-test [seconds, 1-3600]");
+                Environment.ExitCode = 2;
+                return;
+            }
+            Environment.ExitCode = SimulationSelfTest.Run(seconds);
+            return;
+        }
         // The app is an interactive terminal program: the menu blocks on ReadKey
         // and the dashboard paints the alternate screen. With stdin piped or
         // redirected, ReadKey throws after startup; fail fast with a clear message
@@ -157,13 +169,13 @@ internal static class Program
         Console.WriteLine();
         if (fatalError == null)
         {
-            Console.WriteLine("Session saved. Goodbye.");
+            Console.WriteLine(orchestrator.SessionSaved ? "Session saved. Goodbye." : orchestrator.SimulationMode ? "Simulation closed. Goodbye." : $"Session NOT saved: {orchestrator.SaveError}");
         }
         else
         {
             Console.WriteLine("The program stopped after an unexpected error:");
             Console.WriteLine($"  {fatalError.GetType().Name}: {fatalError.Message}");
-            Console.WriteLine("The session was saved. See the log file for the full details.");
+            Console.WriteLine(orchestrator.SessionSaved ? "The session was saved. See the log for details." : $"Session NOT saved: {orchestrator.SaveError}");
         }
     }
 

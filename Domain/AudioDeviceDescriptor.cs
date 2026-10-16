@@ -7,6 +7,10 @@ namespace M32LiveConsoleTool.Domain;
 /// </summary>
 public class AudioDeviceDescriptor
 {
+    public bool AutoLevelEnabled { get; set; } = true;
+    public bool ProtectionEnabled { get; set; } = true;
+    public double MaxFaderDb { get; set; } = 10;
+    public double MaxGainReductionDb { get; set; } = 24;
     /// <summary>Device type: "channel" or "bus".</summary>
     public string Type { get; set; } = "channel";
 
@@ -27,12 +31,14 @@ public class AudioDeviceDescriptor
     /// </summary>
     public AudioDevice ToAudioDevice()
     {
-        if (Type == "bus")
-        {
-            return new Bus(Name, OscNumber, TargetLevelDb);
-        }
-
-        return new MixerChannel(Name, OscNumber, TargetLevelDb, PreampGain);
+        AudioDevice device = Type == "bus"
+            ? new Bus(Name, OscNumber, TargetLevelDb)
+            : new MixerChannel(Name, OscNumber, TargetLevelDb, PreampGain);
+        device.AutoLevelEnabled = AutoLevelEnabled;
+        device.ProtectionEnabled = ProtectionEnabled;
+        device.MaxFaderDb = MaxFaderDb;
+        device.MaxGainReductionDb = MaxGainReductionDb;
+        return device;
     }
 
     /// <summary>
@@ -44,6 +50,10 @@ public class AudioDeviceDescriptor
         descriptor.Name = device.Name;
         descriptor.OscNumber = device.OscNumber;
         descriptor.TargetLevelDb = device.TargetLevelDb;
+        descriptor.AutoLevelEnabled = device.AutoLevelEnabled;
+        descriptor.ProtectionEnabled = device.ProtectionEnabled;
+        descriptor.MaxFaderDb = device.MaxFaderDb;
+        descriptor.MaxGainReductionDb = device.MaxGainReductionDb;
 
         if (device is MixerChannel channel)
         {

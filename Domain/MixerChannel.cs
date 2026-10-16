@@ -18,6 +18,21 @@ public class MixerChannel : AudioDevice
     // ─────────────────────────────────────────────────────────────────────
 
     private double preampGain;
+    public GainState Gain { get; internal set; } = new();
+    public bool GainInitialized => HeadAmpResolved && Gain.IsConfirmed && Clock.GetElapsedTime(Gain.ObservedAt).TotalMilliseconds < 3000;
+
+    public void InvalidateRouting()
+    {
+        HeadAmpResolved = false;
+        HeadAmpIndex = -1;
+        Gain = new GainState();
+    }
+
+    public override void ResetObservedState()
+    {
+        base.ResetObservedState();
+        InvalidateRouting();
+    }
 
     /// <summary>
     /// Index of the console head amp feeding this channel (0-127: local XLR
@@ -35,6 +50,7 @@ public class MixerChannel : AudioDevice
     /// digital source with no analog head amp, which needs no retry).
     /// </summary>
     private volatile bool headAmpResolved;
+    private long headAmpObservedAt;
 
     // ─────────────────────────────────────────────────────────────────────
     // Constructor
@@ -62,8 +78,8 @@ public class MixerChannel : AudioDevice
     /// </summary>
     public double PreampGain
     {
-        get { return preampGain; }
-        set { preampGain = value; }
+        get { return Gain.IsConfirmed ? Gain.ObservedDb : preampGain; }
+        set { if (double.IsFinite(value)) preampGain = value; }
     }
 
     /// <summary>
@@ -84,8 +100,8 @@ public class MixerChannel : AudioDevice
     /// </summary>
     public bool HeadAmpResolved
     {
-        get { return headAmpResolved; }
-        set { headAmpResolved = value; }
+        get { return headAmpResolved && Clock.GetElapsedTime(headAmpObservedAt).TotalMilliseconds < 3000; }
+        set { headAmpResolved = value; if (value) headAmpObservedAt = Clock.GetTimestamp(); }
     }
 
     // ─────────────────────────────────────────────────────────────────────
